@@ -119,25 +119,34 @@ def _notify_all(notifiers: list[Notifier], title: str, body: str) -> bool:
     return ok
 
 
-def _deliver(notifiers: list[Notifier], store: StateStore, transitions) -> int:
-    """감지 즉시 알린다. 전달하지 못한 건수를 반환한다.
+def _deliver(
+    notifiers: list[Notifier],
+    store: StateStore,
+    transitions,
+    pending: set,
+) -> None:
+    """감지 즉시 알린다.
 
     라운드가 끝날 때마다 바로 보내는 게 중요하다. 실행이 50분씩 이어지므로
     끝에 모아서 보내면 첫 라운드에 잡은 좌석이 50분 뒤에야 전달된다.
 
     모든 채널에서 실패하면 그 회차의 관측을 되돌려 다음 라운드에 재시도한다.
+    pending 은 아직 전달하지 못한 회차 키의 집합이며, 나중 라운드에서 재시도가
+    성공하면 빠진다. 이렇게 해야 일시적인 장애로 재시도에 성공한 실행이
+    실패로 잘못 표시되지 않는다.
     """
-    undelivered = 0
     for transition in transitions:
         if transition.kind == KIND_LISTED:
             title, body = build_listed_text(transition)
         else:
             title, body = build_seat_text(transition)
 
+        key = transition.showtime.key
         if _notify_all(notifiers, title, body):
+            pending.discard(key)
             continue
 
-        undelivered += 1
+        pending.add(key)
         store.rollback(transition)
         log.error(
             "알림 전달 실패 — 모든 채널에서 실패: %s %s %s",
@@ -145,7 +154,6 @@ def _deliver(notifiers: list[Notifier], store: StateStore, transitions) -> int:
             transition.showtime.display_date(),
             transition.showtime.display_time(),
         )
-    return undelivered
 
 
 def _collect_targets(
@@ -299,7 +307,7 @@ def run(config: Config, notifiers: list[Notifier], dump_dir: Path) -> int:
     throttle = Throttle(config.polling.request_delay_sec)
     transitions: list[Transition] = []
     last_snapshot: list[tuple[Showtime, int]] = []
-    undelivered = 0
+    pending_delivery: set = set()
     failure: Exception | None = None
 
     with CgvClient(throttle) as client:
@@ -348,7 +356,7 @@ def run(config: Config, notifiers: list[Notifier], dump_dir: Path) -> int:
 
                 # 감지 즉시 발송한다. 실행이 50분 이어지므로 끝에 모아 보내면
                 # 첫 라운드에 잡은 좌석이 50분 뒤에 전달된다.
-                undelivered += _deliver(notifiers, store, round_transitions)
+                _deliver(notifiers, store, round_transitions, pending_delivery)
 
                 # 오래 도는 실행에서 job 이 중간에 죽어도 여기까지의 관측을
                 # 잃지 않도록 라운드마다 저장한다. 파일이 작아 비용은 무시할 만하다.
@@ -393,18 +401,22 @@ def run(config: Config, notifiers: list[Notifier], dump_dir: Path) -> int:
         )
         if _notify_all(notifiers, title, body):
             store.heartbeat_at = now.isoformat(timespec="seconds")
+        else:
+            # 보내지 못했으면 heartbeat_at 을 갱신하지 않는다.
+            # 다음 실행에서 다시 시도한다.
+            log.warning("생존 신고를 보내지 못했다. 다음 실행에서 재시도한다.")
 
     store.save()
 
-    if undelivered:
+    if pending_delivery:
         log.error(
-            "완료. 전이 %d건 중 %d건을 어느 채널로도 보내지 못함.",
+            "완료. 전이 %d건 중 %d건을 끝내 보내지 못함.",
             len(transitions),
-            undelivered,
+            len(pending_delivery),
         )
         return 1
 
-    log.info("완료. 전이 %d건 감지, 전부 발송함.", len(transitions))
+    log.info("완료. 전이 %d건 감지, 미전달 없음.", len(transitions))
     return 0
 
 
