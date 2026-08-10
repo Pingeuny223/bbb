@@ -39,6 +39,7 @@ class StateStore:
         self.failure_consecutive: int = 0
         self.failure_last_alert_at: str | None = None
         self.expiry_alert_at: str | None = None
+        self.heartbeat_at: str | None = None
         self.loaded_from_disk: bool = False
 
     # -- 입출력 ----------------------------------------------------------
@@ -89,6 +90,9 @@ class StateStore:
         expiry = payload.get("expiry_alert_at")
         self.expiry_alert_at = str(expiry) if expiry else None
 
+        heartbeat = payload.get("heartbeat_at")
+        self.heartbeat_at = str(heartbeat) if heartbeat else None
+
         self.loaded_from_disk = True
         log.info("state 복원: 회차 %d건, 연속 실패 %d회", len(self.showtimes), self.failure_consecutive)
 
@@ -111,6 +115,7 @@ class StateStore:
                 "last_alert_at": self.failure_last_alert_at,
             },
             "expiry_alert_at": self.expiry_alert_at,
+            "heartbeat_at": self.heartbeat_at,
         }
         # 쓰다 죽어도 기존 파일이 반쯤 덮이지 않도록 임시 파일 후 교체.
         temp = self.path.with_suffix(self.path.suffix + ".tmp")
@@ -215,6 +220,24 @@ class StateStore:
         if stale:
             log.info("지난 회차 %d건 정리", len(stale))
         return len(stale)
+
+    def should_send_heartbeat(
+        self, interval_hours: int, now: datetime | None = None
+    ) -> bool:
+        """생존 신고를 보낼 시점인지. interval_hours=0 이면 끈다.
+
+        '아무 알림도 없음'이 정상 동작인지 죽은 것인지 구분하기 위한 것이다.
+        """
+        if interval_hours <= 0:
+            return False
+        now = now or datetime.now(KST)
+        if not self.heartbeat_at:
+            return True
+        try:
+            previous = datetime.fromisoformat(self.heartbeat_at)
+        except ValueError:
+            return True
+        return now - previous >= timedelta(hours=interval_hours)
 
     def should_alert_expiry(
         self, cooldown_minutes: int = 1440, now: datetime | None = None

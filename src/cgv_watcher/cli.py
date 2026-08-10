@@ -31,6 +31,7 @@ from .models import KST, Showtime
 from .notify import (
     Notifier,
     build_failure_text,
+    build_heartbeat_text,
     build_notifiers,
     build_seat_text,
     redact_secrets,
@@ -150,9 +151,14 @@ def _run_round(
     targets: dict[str, list[WatchRule]],
     date_cache: dict[str, list[str]],
     dump_dir: Path,
-) -> list[Transition]:
-    """폴링 1라운드. 전이된 회차 목록을 반환한다."""
+) -> tuple[list[Transition], list[Showtime]]:
+    """폴링 1라운드.
+
+    (전이된 회차, 이번 라운드에서 조건에 맞은 회차 전부)를 반환한다.
+    두 번째 값은 생존 신고에 현재 현황을 싣는 데 쓴다.
+    """
     transitions: list[Transition] = []
+    snapshot: list[Showtime] = []
     now = datetime.now(KST)
 
     for site_no, rules in targets.items():
@@ -200,6 +206,7 @@ def _run_round(
                         )
 
             for showtime, min_seats, names in matched.values():
+                snapshot.append(showtime)
                 transition = store.evaluate(
                     showtime=showtime,
                     min_seats=min_seats,
@@ -211,7 +218,7 @@ def _run_round(
                 if transition:
                     transitions.append(transition)
 
-    return transitions
+    return transitions, snapshot
 
 
 def _all_watches_expired(config: Config, today) -> bool:
@@ -256,6 +263,7 @@ def run(config: Config, notifiers: list[Notifier], dump_dir: Path) -> int:
 
     throttle = Throttle(config.polling.request_delay_sec)
     transitions: list[Transition] = []
+    last_snapshot: list[Showtime] = []
     failure: Exception | None = None
 
     with CgvClient(throttle) as client:
@@ -281,9 +289,12 @@ def run(config: Config, notifiers: list[Notifier], dump_dir: Path) -> int:
                     round_index + 1,
                     config.polling.rounds_per_run,
                 )
-                transitions += _run_round(
+                round_transitions, snapshot = _run_round(
                     client, store, config, targets, date_cache, dump_dir
                 )
+                transitions += round_transitions
+                # 마지막 라운드의 현황이 가장 최신이다.
+                last_snapshot = snapshot
 
             store.failure_consecutive = 0
             store.failure_last_alert_at = None
@@ -320,6 +331,19 @@ def run(config: Config, notifiers: list[Notifier], dump_dir: Path) -> int:
                 )
         store.save()
         return 1
+
+    # 생존 신고. 알림이 없는 게 정상인지 죽은 것인지 구분하기 위한 것이므로
+    # 정상 실행에서만 보낸다(실패는 별도의 실패 알림이 담당한다).
+    now = datetime.now(KST)
+    if store.should_send_heartbeat(config.heartbeat_hours, now=now):
+        title, body = build_heartbeat_text(
+            showtimes=last_snapshot,
+            min_seats=min(rule.min_seats for rule in config.watches),
+            last_watch_day=max(rule.date_range.end for rule in config.watches),
+            checked_at=now.strftime("%Y-%m-%d %H:%M KST"),
+        )
+        if _notify_all(notifiers, title, body):
+            store.heartbeat_at = now.isoformat(timespec="seconds")
 
     store.save()
 

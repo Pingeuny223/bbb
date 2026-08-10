@@ -200,3 +200,15 @@ def test_expiry_marker_survives_roundtrip(tmp_path):
     second = StateStore(path)
     second.load()
     assert second.expiry_alert_at == NOW.isoformat(timespec="seconds")
+
+
+def test_heartbeat_interval(store):
+    """생존 신고는 지정한 시간 간격으로만."""
+    assert store.should_send_heartbeat(12, now=NOW)  # 최초는 항상 보냄
+    store.heartbeat_at = NOW.isoformat(timespec="seconds")
+    assert not store.should_send_heartbeat(12, now=NOW + timedelta(hours=6))
+    assert store.should_send_heartbeat(12, now=NOW + timedelta(hours=13))
+
+
+def test_heartbeat_can_be_disabled(store):
+    assert not store.should_send_heartbeat(0, now=NOW)

@@ -21,6 +21,7 @@ DEFAULT_ROUNDS = 3
 DEFAULT_ROUND_INTERVAL = (60.0, 90.0)
 DEFAULT_REQUEST_DELAY = (2.0, 5.0)
 DEFAULT_FAILURE_THRESHOLD = 3
+DEFAULT_HEARTBEAT_HOURS = 12  # 하루 2회. 0이면 끔.
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,7 @@ class Config:
     cooldown_minutes: int
     notify_on_first_seen: bool
     failure_threshold: int
+    heartbeat_hours: int
     state_path: Path = field(default=Path("state/seats.json"))
 
 
@@ -231,6 +233,14 @@ def load_config(path: str | Path) -> Config:
     if threshold < 1:
         raise ConfigError("defaults.failure_threshold: 1 이상이어야 함")
 
+    heartbeat = defaults.get("heartbeat_hours", DEFAULT_HEARTBEAT_HOURS)
+    try:
+        heartbeat = int(heartbeat)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"defaults.heartbeat_hours: 정수여야 함 — {exc}") from exc
+    if heartbeat < 0:
+        raise ConfigError("defaults.heartbeat_hours: 0 이상이어야 함 (0 = 끔)")
+
     return Config(
         watches=watches,
         polling=PollingConfig(
@@ -249,4 +259,5 @@ def load_config(path: str | Path) -> Config:
         cooldown_minutes=cooldown,
         notify_on_first_seen=bool(defaults.get("notify_on_first_seen", False)),
         failure_threshold=threshold,
+        heartbeat_hours=heartbeat,
     )

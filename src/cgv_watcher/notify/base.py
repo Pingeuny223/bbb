@@ -47,6 +47,32 @@ def redact_secrets(text: str, env: dict | None = None) -> str:
     return result
 
 
+# 알림 종류. 채널마다 아이콘과 색을 다르게 주는 데 쓴다.
+LEVEL_SEAT = "seat"
+LEVEL_INFO = "info"
+LEVEL_ERROR = "error"
+
+_LEVEL_BY_TITLE = {
+    "좌석 발생": LEVEL_SEAT,
+    "감시 실패": LEVEL_ERROR,
+    "감시 정상 동작 중": LEVEL_INFO,
+    "감시 기간 종료": LEVEL_INFO,
+    "연결 테스트": LEVEL_INFO,
+}
+
+
+def classify(title: str) -> str:
+    """제목으로 알림 종류를 판별한다.
+
+    build_*_text 가 만드는 제목이 기준이며, 뒤에 '(테스트)' 같은 꼬리표가
+    붙어도 앞부분으로 맞춘다.
+    """
+    for prefix, level in _LEVEL_BY_TITLE.items():
+        if title.startswith(prefix):
+            return level
+    return LEVEL_INFO
+
+
 class Notifier(Protocol):
     name: str
 
@@ -83,6 +109,47 @@ def build_seat_text(transition: Transition) -> tuple[str, str]:
         lines.append(f"(조건: {', '.join(transition.rule_names)})")
 
     return "좌석 발생", "\n".join(lines)
+
+
+def build_heartbeat_text(
+    showtimes: list,
+    min_seats: int,
+    last_watch_day,
+    checked_at: str,
+    max_rows: int = 12,
+) -> tuple[str, str]:
+    """생존 신고의 (제목, 본문).
+
+    '알림이 없다'가 정상인지 죽은 것인지 구분하기 위한 메시지다.
+    기왕 보내는 김에 현재 잔여석 현황도 같이 담아 한 번에 파악되게 한다.
+    """
+    lines = [
+        f"🕐 마지막 확인: {checked_at}",
+        f"👀 감시 중인 회차: {len(showtimes)}건",
+        f"🎯 알림 기준: {min_seats}석 이상",
+        f"📆 감시 종료일: {last_watch_day}",
+    ]
+
+    if showtimes:
+        lines += ["", "현재 잔여석"]
+        ordered = sorted(showtimes, key=lambda s: (s.play_date, s.start_minutes))
+        for showtime in ordered[:max_rows]:
+            mark = "🔔" if showtime.free_seats >= min_seats else "  "
+            lines.append(
+                f"{mark} {showtime.display_date()} {showtime.display_time()} "
+                f"{showtime.display_screen()} — {showtime.free_seats}석"
+            )
+        if len(ordered) > max_rows:
+            lines.append(f"   … 외 {len(ordered) - max_rows}건")
+    else:
+        lines += [
+            "",
+            "⚠️ 조건에 맞는 회차가 하나도 없습니다.",
+            "config.yaml 의 영화명·지점·상영관·날짜를 확인하세요.",
+        ]
+
+    lines += ["", "이 메시지는 감시가 살아 있다는 확인용입니다."]
+    return "감시 정상 동작 중", "\n".join(lines)
 
 
 def build_failure_text(consecutive: int, detail: str) -> tuple[str, str]:

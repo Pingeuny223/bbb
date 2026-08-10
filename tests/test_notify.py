@@ -184,3 +184,58 @@ def test_log_filter_redacts_third_party_records():
         log_filter.filter(record)
 
     assert "secret_TOKEN123" not in record.getMessage()
+
+
+# -- 생존 신고 ---------------------------------------------------------------
+
+
+def _sample_showtime(free, hhmm="1730"):
+    from cgv_watcher.models import Showtime
+
+    return Showtime(
+        site_no="0059", site_name="CGV 영등포타임스퀘어", screen_no="017",
+        screen_name="IMAX관", screen_grade="아이맥스", movie_no="30001323",
+        movie_name="오디세이", movie_kind="IMAX 2D", rating="15세",
+        play_date="20260814", start_hhmm=hhmm, end_hhmm="2032", seq=hhmm,
+        free_seats=free, total_seats=387,
+    )
+
+
+def test_heartbeat_marks_rows_above_threshold():
+    from datetime import date
+
+    from cgv_watcher.notify.base import build_heartbeat_text
+
+    title, body = build_heartbeat_text(
+        showtimes=[_sample_showtime(7, "1400"), _sample_showtime(2, "1730")],
+        min_seats=4,
+        last_watch_day=date(2026, 8, 15),
+        checked_at="2026-08-10 14:30 KST",
+    )
+    assert title == "감시 정상 동작 중"
+    assert "7석" in body and "2석" in body
+    assert body.count("🔔") == 1  # 4석 이상인 회차만 표시
+
+
+def test_heartbeat_warns_when_nothing_matches():
+    from datetime import date
+
+    from cgv_watcher.notify.base import build_heartbeat_text
+
+    _, body = build_heartbeat_text(
+        showtimes=[], min_seats=4,
+        last_watch_day=date(2026, 8, 15), checked_at="x",
+    )
+    assert "회차가 하나도 없습니다" in body
+
+
+def test_notification_icons_differ_by_kind():
+    from cgv_watcher.notify.base import (
+        LEVEL_ERROR, LEVEL_INFO, LEVEL_SEAT, classify,
+    )
+
+    assert classify("좌석 발생") == LEVEL_SEAT
+    assert classify("좌석 발생 (테스트)") == LEVEL_SEAT
+    assert classify("감시 실패") == LEVEL_ERROR
+    assert classify("감시 정상 동작 중") == LEVEL_INFO
+    assert classify("감시 기간 종료") == LEVEL_INFO

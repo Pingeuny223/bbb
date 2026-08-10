@@ -7,10 +7,15 @@ import time
 
 import requests
 
+from .base import LEVEL_ERROR, LEVEL_SEAT, classify
+
 log = logging.getLogger(__name__)
 
-COLOR_SEAT = 0x2ECC71  # 초록
-COLOR_FAILURE = 0xE74C3C  # 빨강
+_STYLE = {
+    LEVEL_SEAT: ("🎟️", 0x2ECC71),  # 초록
+    LEVEL_ERROR: ("⚠️", 0xE74C3C),  # 빨강
+    "info": ("ℹ️", 0x3498DB),  # 파랑
+}
 
 # Discord embed description 상한은 4096자. 여유를 두고 자른다.
 MAX_DESCRIPTION = 3900
@@ -24,13 +29,13 @@ class DiscordNotifier:
         self._timeout = timeout
 
     def send(self, title: str, body: str) -> None:
-        is_failure = "실패" in title
+        icon, color = _STYLE[classify(title)]
         payload = {
             "embeds": [
                 {
-                    "title": ("⚠️ " if is_failure else "🎟️ ") + title,
+                    "title": f"{icon} {title}",
                     "description": body[:MAX_DESCRIPTION],
-                    "color": COLOR_FAILURE if is_failure else COLOR_SEAT,
+                    "color": color,
                 }
             ]
         }

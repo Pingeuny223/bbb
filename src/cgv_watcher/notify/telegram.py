@@ -8,7 +8,11 @@ import time
 
 import requests
 
+from .base import LEVEL_ERROR, LEVEL_SEAT, classify
+
 log = logging.getLogger(__name__)
+
+_ICON = {LEVEL_SEAT: "🎟️", LEVEL_ERROR: "⚠️", "info": "ℹ️"}
 
 API_BASE = "https://api.telegram.org"
 
@@ -25,8 +29,7 @@ class TelegramNotifier:
         self._timeout = timeout
 
     def send(self, title: str, body: str) -> None:
-        is_failure = "실패" in title
-        prefix = "⚠️" if is_failure else "🎟️"
+        prefix = _ICON[classify(title)]
         text = f"<b>{prefix} {html.escape(title)}</b>\n\n{html.escape(body)}"
 
         url = f"{API_BASE}/bot{self._token}/sendMessage"
