@@ -38,10 +38,17 @@ defaults:
   notify_on_first_seen: true
 
 polling:
-  # 3라운드 × 45~60초 = job 약 3분 50초.
-  # cron 5분 간격 안에 여유 있게 들어와 실행이 겹치지 않습니다.
+  # GitHub 스케줄은 */5 로 걸어도 실제로는 한참 밀립니다(실측 89분 간격).
+  # 그래서 '자주 깨어나기'가 아니라 '한 번 깨어나서 오래 돌기'로 주기를 만듭니다.
+  #
+  # 50분간 3분 간격 = 약 17라운드.
+  # 실행이 끝나면 대기 중이던 다음 트리거가 바로 이어받아 사실상 끊기지 않습니다.
+  run_duration_minutes: 50
+  round_interval_sec: [170, 190] # 약 3분
+
+  # run_duration_minutes 가 0일 때만 쓰입니다.
   rounds_per_run: 3
-  round_interval_sec: [45, 60]
+
   request_delay_sec: [2.0, 5.0]
 
 # 공통 조건 (YAML 앵커로 반복을 줄입니다)

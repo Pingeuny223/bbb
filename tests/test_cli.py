@@ -148,3 +148,87 @@ def test_expired_watches_skip_cgv_entirely(config_file, tmp_path, monkeypatch):
     assert code == 0
     client_cls.assert_not_called()  # 요청을 한 번도 보내면 안 된다
     assert fake.sent and fake.sent[0][0] == "감시 기간 종료"
+
+
+# -- 지속 실행 루프 -----------------------------------------------------------
+#
+# GitHub 스케줄이 89분씩 밀리는 걸 보완하려고, 한 번 깨어나면 정해진 시간 동안
+# 계속 도는 구조를 쓴다. 그 루프가 시간 기준으로 끝나는지 확인한다.
+
+
+def _run_with_polling(monkeypatch, tmp_path, polling, elapsed_per_round=0.0):
+    """CGV 호출을 모두 가짜로 바꾸고 run() 의 라운드 루프만 돌린다."""
+    import cgv_watcher.cli as cli_mod
+
+    config = load_config_from(tmp_path, polling)
+
+    rounds = {"n": 0}
+    clock = {"t": 0.0}
+
+    real_now = cli_mod.datetime
+
+    class FakeDateTime(real_now):
+        @classmethod
+        def now(cls, tz=None):
+            return real_now.fromtimestamp(1_800_000_000 + clock["t"], tz)
+
+    monkeypatch.setattr(cli_mod, "datetime", FakeDateTime)
+    monkeypatch.setattr(cli_mod.time, "sleep", lambda s: clock.__setitem__("t", clock["t"] + s))
+    monkeypatch.setattr(cli_mod, "CgvClient", mock.MagicMock())
+    monkeypatch.setattr(cli_mod, "parse_sites", lambda _: {"영등포타임스퀘어": "0059"})
+
+    def fake_round(*args, **kwargs):
+        rounds["n"] += 1
+        clock["t"] += elapsed_per_round
+        return [], []
+
+    monkeypatch.setattr(cli_mod, "_run_round", fake_round)
+    cli_mod.run(config, [FakeNotifier()], tmp_path / "dumps")
+    return rounds["n"]
+
+
+def load_config_from(tmp_path, polling):
+    path = tmp_path / "c.yaml"
+    path.write_text(CONFIG_YAML, encoding="utf-8")
+    config = load_config(path)
+    return dataclasses.replace(
+        config, polling=polling, state_path=tmp_path / "s.json", heartbeat_hours=0
+    )
+
+
+def test_duration_mode_runs_until_time_is_up(monkeypatch, tmp_path):
+    """50분 동안 3분 간격이면 대략 16~17라운드."""
+    from cgv_watcher.config import PollingConfig
+
+    polling = PollingConfig(
+        rounds_per_run=3,
+        round_interval_sec=(180.0, 180.0),
+        request_delay_sec=(0.0, 0.0),
+        run_duration_minutes=50,
+    )
+    assert 15 <= _run_with_polling(monkeypatch, tmp_path, polling) <= 18
+
+
+def test_duration_zero_falls_back_to_rounds_per_run(monkeypatch, tmp_path):
+    from cgv_watcher.config import PollingConfig
+
+    polling = PollingConfig(
+        rounds_per_run=3,
+        round_interval_sec=(1.0, 1.0),
+        request_delay_sec=(0.0, 0.0),
+        run_duration_minutes=0,
+    )
+    assert _run_with_polling(monkeypatch, tmp_path, polling) == 3
+
+
+def test_duration_mode_always_runs_at_least_once(monkeypatch, tmp_path):
+    """지속 시간이 아주 짧아도 최소 한 번은 확인한다."""
+    from cgv_watcher.config import PollingConfig
+
+    polling = PollingConfig(
+        rounds_per_run=3,
+        round_interval_sec=(180.0, 180.0),
+        request_delay_sec=(0.0, 0.0),
+        run_duration_minutes=1,
+    )
+    assert _run_with_polling(monkeypatch, tmp_path, polling) == 1

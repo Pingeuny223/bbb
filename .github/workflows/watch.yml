@@ -2,8 +2,12 @@ name: CGV 잔여좌석 감시
 
 on:
   schedule:
-    # 5분 간격. GitHub Actions 스케줄은 정확하지 않으며 수 분~수십 분
-    # 지연되거나 건너뛸 수 있습니다(README '스케줄 지연' 참고).
+    # 5분 간격으로 걸지만 GitHub은 대부분을 버린다(실측 89분 간격).
+    # 그래서 트리거 빈도로 주기를 만들지 않고, 한 번 깨어나면 50분간 계속
+    # 감시한다(config.yaml 의 run_duration_minutes).
+    #
+    # 자주 걸어두는 이유: concurrency 로 겹침이 막히고 대기 슬롯이 하나 유지되므로,
+    # 실행이 끝나는 즉시 대기 중이던 트리거가 이어받아 공백이 거의 없다.
     - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
@@ -28,7 +32,7 @@ permissions:
 jobs:
   watch:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 60
 
     steps:
       - name: 체크아웃

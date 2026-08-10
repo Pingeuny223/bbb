@@ -21,7 +21,7 @@ import sys
 import time
 from collections import defaultdict
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .cgv_client import CgvClient
@@ -282,23 +282,46 @@ def run(config: Config, notifiers: list[Notifier], dump_dir: Path) -> int:
 
             date_cache: dict[str, list[str]] = {}
 
-            for round_index in range(config.polling.rounds_per_run):
+            duration = config.polling.run_duration_minutes
+            deadline = (
+                datetime.now(KST) + timedelta(minutes=duration) if duration else None
+            )
+            if deadline:
+                log.info(
+                    "%d분 동안 약 %.0f초 간격으로 감시한다 (종료 예정 %s)",
+                    duration,
+                    sum(config.polling.round_interval_sec) / 2,
+                    deadline.strftime("%H:%M"),
+                )
+
+            round_index = 0
+            while True:
                 if round_index:
                     gap = random.uniform(*config.polling.round_interval_sec)
+                    # 남은 시간보다 대기가 길면 더 돌지 않고 끝낸다.
+                    if deadline and datetime.now(KST) + timedelta(seconds=gap) >= deadline:
+                        log.info("남은 시간이 부족해 감시를 마친다")
+                        break
                     log.info("라운드 간 대기 %.0fs", gap)
                     time.sleep(gap)
 
-                log.info(
-                    "=== 라운드 %d/%d ===",
-                    round_index + 1,
-                    config.polling.rounds_per_run,
-                )
+                round_index += 1
+                log.info("=== 라운드 %d ===", round_index)
                 round_transitions, snapshot = _run_round(
                     client, store, config, targets, date_cache, dump_dir
                 )
                 transitions += round_transitions
                 # 마지막 라운드의 현황이 가장 최신이다.
                 last_snapshot = snapshot
+
+                # 오래 도는 실행에서 job 이 중간에 죽어도 여기까지의 관측을
+                # 잃지 않도록 라운드마다 저장한다. 파일이 작아 비용은 무시할 만하다.
+                store.save()
+
+                if deadline is None and round_index >= config.polling.rounds_per_run:
+                    break
+                if deadline and datetime.now(KST) >= deadline:
+                    break
 
             store.failure_consecutive = 0
             store.failure_last_alert_at = None

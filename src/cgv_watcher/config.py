@@ -19,6 +19,7 @@ DEFAULT_MIN_SEATS = 1
 DEFAULT_MIN_FREE_RATIO = 0.0  # 0 = 비율 조건 없음
 DEFAULT_COOLDOWN_MINUTES = 30
 DEFAULT_ROUNDS = 3
+DEFAULT_RUN_DURATION_MINUTES = 0  # 0 = rounds_per_run 만큼만 돌고 끝
 DEFAULT_ROUND_INTERVAL = (60.0, 90.0)
 DEFAULT_REQUEST_DELAY = (2.0, 5.0)
 DEFAULT_FAILURE_THRESHOLD = 3
@@ -65,6 +66,11 @@ class PollingConfig:
     rounds_per_run: int
     round_interval_sec: tuple[float, float]
     request_delay_sec: tuple[float, float]
+    # 한 번 실행에서 이 시간만큼 계속 감시한다. 0이면 rounds_per_run 을 쓴다.
+    #
+    # GitHub 스케줄은 */5 로 걸어도 실제로는 한 시간 넘게 밀린다(실측 89분).
+    # 그래서 '자주 깨어나기'가 아니라 '한 번 깨어나서 오래 돌기'로 간격을 만든다.
+    run_duration_minutes: int = 0
 
 
 @dataclass(frozen=True)
@@ -253,6 +259,14 @@ def load_config(path: str | Path) -> Config:
     if threshold < 1:
         raise ConfigError("defaults.failure_threshold: 1 이상이어야 함")
 
+    duration = polling_raw.get("run_duration_minutes", DEFAULT_RUN_DURATION_MINUTES)
+    try:
+        duration = int(duration)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"polling.run_duration_minutes: 정수여야 함 — {exc}") from exc
+    if duration < 0:
+        raise ConfigError("polling.run_duration_minutes: 0 이상이어야 함")
+
     heartbeat = defaults.get("heartbeat_hours", DEFAULT_HEARTBEAT_HOURS)
     try:
         heartbeat = int(heartbeat)
@@ -275,6 +289,7 @@ def load_config(path: str | Path) -> Config:
                 "polling.request_delay_sec",
                 DEFAULT_REQUEST_DELAY,
             ),
+            run_duration_minutes=duration,
         ),
         cooldown_minutes=cooldown,
         notify_on_first_seen=bool(defaults.get("notify_on_first_seen", False)),
