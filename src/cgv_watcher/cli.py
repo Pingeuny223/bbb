@@ -214,9 +214,37 @@ def _run_round(
     return transitions
 
 
+def _all_watches_expired(config: Config, today) -> bool:
+    """모든 규칙의 날짜 범위가 지났는지."""
+    return all(rule.date_range.end < today for rule in config.watches)
+
+
 def run(config: Config, notifiers: list[Notifier], dump_dir: Path) -> int:
     store = StateStore(config.state_path)
     store.load()
+
+    # 감시 기간이 끝났으면 CGV에 요청하지 않는다. 잡을 게 없는데 5분마다
+    # 계속 두드릴 이유가 없다. 조용히 도는 대신 만료됐다고 알린다.
+    today = datetime.now(KST).date()
+    if _all_watches_expired(config, today):
+        log.warning(
+            "config.yaml 의 모든 date_range 가 지났다(오늘 %s). CGV 조회를 건너뛴다.",
+            today,
+        )
+        if store.should_alert_expiry():
+            last_day = max(rule.date_range.end for rule in config.watches)
+            _notify_all(
+                notifiers,
+                "감시 기간 종료",
+                f"config.yaml 의 감시 기간이 {last_day} 로 모두 지났습니다.\n"
+                f"이제 아무것도 잡히지 않습니다.\n\n"
+                f"계속 쓰시려면 config.yaml 의 date_range 를 새 날짜로 바꾸세요.\n"
+                f"당분간 안 쓰시면 Actions 탭에서 워크플로를 비활성화하세요\n"
+                f"(… 메뉴 → Disable workflow).",
+            )
+            store.expiry_alert_at = datetime.now(KST).isoformat(timespec="seconds")
+        store.save()
+        return 0
 
     first_run = not store.loaded_from_disk
     if first_run:

@@ -181,3 +181,22 @@ def test_failure_alert_threshold_and_cooldown(store):
     assert store.should_alert_failure(
         threshold=3, cooldown_minutes=60, now=NOW + timedelta(minutes=90)
     )
+
+
+def test_expiry_alert_respects_cooldown(store):
+    """감시 기간 만료 알림은 하루 1회만."""
+    assert store.should_alert_expiry(now=NOW)
+    store.expiry_alert_at = NOW.isoformat(timespec="seconds")
+    assert not store.should_alert_expiry(now=NOW + timedelta(hours=5))
+    assert store.should_alert_expiry(now=NOW + timedelta(hours=25))
+
+
+def test_expiry_marker_survives_roundtrip(tmp_path):
+    path = tmp_path / "seats.json"
+    first = StateStore(path)
+    first.expiry_alert_at = NOW.isoformat(timespec="seconds")
+    first.save()
+
+    second = StateStore(path)
+    second.load()
+    assert second.expiry_alert_at == NOW.isoformat(timespec="seconds")
