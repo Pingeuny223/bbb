@@ -1,0 +1,333 @@
+"""실행 오케스트레이션.
+
+한 번의 실행(= Actions job 1회) 안에서:
+  1. state 복원
+  2. 지점명 -> siteNo 해석
+  3. rounds_per_run 만큼 폴링 (라운드 사이 랜덤 간격)
+  4. 전이 감지 -> 알림
+  5. state 저장
+
+GitHub Actions 스케줄은 지연될 수 있어서, 한 번 깨어났을 때 짧게 여러 번
+폴링해 실효 감지 주기를 줄인다.
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+import random
+import sys
+import time
+from collections import defaultdict
+from datetime import datetime
+from pathlib import Path
+
+from .cgv_client import CgvClient
+from .config import Config, WatchRule, load_config
+from .errors import ConfigError, FetchError, ParseError, WatcherError
+from .matcher import matches, resolve_site_no
+from .models import KST, Showtime
+from .notify import Notifier, build_failure_text, build_notifiers, build_seat_text
+from .parser import parse_screening_dates, parse_showtimes, parse_sites
+from .ratelimit import Throttle
+from .state import StateStore, Transition
+
+log = logging.getLogger("cgv_watcher")
+
+FAILURE_ALERT_COOLDOWN_MINUTES = 60
+
+
+def _setup_logging(verbose: bool) -> None:
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        stream=sys.stdout,
+    )
+
+
+def _dump_raw(client: CgvClient, dump_dir: Path, label: str) -> Path | None:
+    """파싱이 깨졌을 때 원문을 남긴다. 조용히 실패하지 않기 위한 것."""
+    raw = client.last_raw_response
+    if not raw:
+        return None
+    dump_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(KST).strftime("%Y%m%d-%H%M%S")
+    path = dump_dir / f"raw-{label}-{stamp}.json"
+    path.write_text(raw[:1_000_000], encoding="utf-8")
+    log.error("원문 응답을 저장했다: %s", path)
+    return path
+
+
+def _notify_all(notifiers: list[Notifier], title: str, body: str) -> bool:
+    """모든 채널에 보낸다. 한 채널이 실패해도 나머지는 시도한다."""
+    ok = False
+    for notifier in notifiers:
+        try:
+            notifier.send(title, body)
+            log.info("[%s] 알림 전송 완료: %s", notifier.name, title)
+            ok = True
+        except Exception as exc:  # 알림 실패가 감시를 죽이면 안 된다
+            log.error("[%s] 알림 전송 실패: %s", notifier.name, exc)
+    return ok
+
+
+def _collect_targets(
+    config: Config, sites: dict[str, str]
+) -> dict[str, list[WatchRule]]:
+    """siteNo -> 그 지점을 보는 규칙들."""
+    targets: dict[str, list[WatchRule]] = defaultdict(list)
+    for rule in config.watches:
+        site_no = resolve_site_no(rule, sites)
+        targets[site_no].append(rule)
+    return dict(targets)
+
+
+def _dates_to_check(rules: list[WatchRule], available: list[str]) -> list[str]:
+    """규칙의 날짜 범위와 실제 예매 오픈 날짜의 교집합.
+
+    오픈도 안 된 날짜에 요청을 던지지 않으려는 것 — 요청 수를 줄인다.
+    """
+    wanted: set[str] = set()
+    for ymd in available:
+        try:
+            day = datetime.strptime(ymd, "%Y%m%d").date()
+        except ValueError:
+            continue
+        if any(rule.date_range.contains(day) for rule in rules):
+            wanted.add(ymd)
+    return sorted(wanted)
+
+
+def _run_round(
+    client: CgvClient,
+    store: StateStore,
+    config: Config,
+    targets: dict[str, list[WatchRule]],
+    date_cache: dict[str, list[str]],
+    dump_dir: Path,
+) -> list[Transition]:
+    """폴링 1라운드. 전이된 회차 목록을 반환한다."""
+    transitions: list[Transition] = []
+    now = datetime.now(KST)
+
+    for site_no, rules in targets.items():
+        if site_no not in date_cache:
+            try:
+                date_cache[site_no] = parse_screening_dates(
+                    client.fetch_screening_dates(site_no)
+                )
+            except ParseError:
+                _dump_raw(client, dump_dir, f"dates-{site_no}")
+                raise
+
+        dates = _dates_to_check(rules, date_cache[site_no])
+        if not dates:
+            log.info("지점 %s: 감시 범위에 해당하는 상영일 없음", site_no)
+            continue
+
+        for ymd in dates:
+            try:
+                showtimes = parse_showtimes(client.fetch_showtimes(site_no, ymd))
+            except ParseError:
+                _dump_raw(client, dump_dir, f"showtimes-{site_no}-{ymd}")
+                raise
+
+            log.info("지점 %s %s: 회차 %d건 수신", site_no, ymd, len(showtimes))
+
+            # 같은 회차를 여러 규칙이 볼 수 있다. min_seats는 가장 느슨한 값을 쓴다.
+            matched: dict[str, tuple[Showtime, int, list[str]]] = {}
+            for showtime in showtimes:
+                if showtime.start_dt <= now:
+                    continue  # 이미 시작한 회차는 볼 필요 없다
+                for rule in rules:
+                    if not matches(showtime, rule):
+                        continue
+                    existing = matched.get(showtime.key)
+                    if existing is None:
+                        matched[showtime.key] = (showtime, rule.min_seats, [rule.name])
+                    else:
+                        _, min_seats, names = existing
+                        names.append(rule.name)
+                        matched[showtime.key] = (
+                            showtime,
+                            min(min_seats, rule.min_seats),
+                            names,
+                        )
+
+            for showtime, min_seats, names in matched.values():
+                transition = store.evaluate(
+                    showtime=showtime,
+                    min_seats=min_seats,
+                    rule_names=tuple(names),
+                    cooldown_minutes=config.cooldown_minutes,
+                    notify_on_first_seen=config.notify_on_first_seen,
+                    now=now,
+                )
+                if transition:
+                    transitions.append(transition)
+
+    return transitions
+
+
+def run(config: Config, notifiers: list[Notifier], dump_dir: Path) -> int:
+    store = StateStore(config.state_path)
+    store.load()
+
+    first_run = not store.loaded_from_disk
+    if first_run:
+        log.warning(
+            "이전 state가 없다. 이번 실행은 현재 좌석 상황을 기준선으로 기록만 하고 "
+            "알림은 보내지 않는다(notify_on_first_seen=%s).",
+            config.notify_on_first_seen,
+        )
+
+    throttle = Throttle(config.polling.request_delay_sec)
+    transitions: list[Transition] = []
+    failure: Exception | None = None
+
+    with CgvClient(throttle) as client:
+        try:
+            sites = parse_sites(client.fetch_sites())
+            log.info("지점 목록 %d개 확보", len(sites))
+
+            targets = _collect_targets(config, sites)
+            log.info(
+                "감시 대상 지점 %d곳 / 규칙 %d개", len(targets), len(config.watches)
+            )
+
+            date_cache: dict[str, list[str]] = {}
+
+            for round_index in range(config.polling.rounds_per_run):
+                if round_index:
+                    gap = random.uniform(*config.polling.round_interval_sec)
+                    log.info("라운드 간 대기 %.0fs", gap)
+                    time.sleep(gap)
+
+                log.info(
+                    "=== 라운드 %d/%d ===",
+                    round_index + 1,
+                    config.polling.rounds_per_run,
+                )
+                transitions += _run_round(
+                    client, store, config, targets, date_cache, dump_dir
+                )
+
+            store.failure_consecutive = 0
+            store.failure_last_alert_at = None
+
+        except (FetchError, ParseError) as exc:
+            failure = exc
+            store.failure_consecutive += 1
+            log.exception("감시 실패 (연속 %d회)", store.failure_consecutive)
+
+    store.prune(datetime.now(KST).date())
+
+    undelivered = 0
+    for transition in transitions:
+        title, body = build_seat_text(transition)
+        if not _notify_all(notifiers, title, body):
+            undelivered += 1
+            # 좌석을 찾아놓고 사용자에게 못 전달한 것이므로 실패로 취급한다.
+            log.error(
+                "알림 전달 실패 — 모든 채널에서 실패: %s %s %s",
+                transition.showtime.movie_name,
+                transition.showtime.display_date(),
+                transition.showtime.display_time(),
+            )
+
+    if failure is not None:
+        if store.should_alert_failure(
+            threshold=config.failure_threshold,
+            cooldown_minutes=FAILURE_ALERT_COOLDOWN_MINUTES,
+        ):
+            title, body = build_failure_text(store.failure_consecutive, str(failure))
+            if _notify_all(notifiers, title, body):
+                store.failure_last_alert_at = datetime.now(KST).isoformat(
+                    timespec="seconds"
+                )
+        store.save()
+        return 1
+
+    store.save()
+
+    if undelivered:
+        log.error(
+            "완료. 전이 %d건 중 %d건을 어느 채널로도 보내지 못함.",
+            len(transitions),
+            undelivered,
+        )
+        return 1
+
+    log.info("완료. 전이 %d건 감지, 전부 발송함.", len(transitions))
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="cgv-watcher", description="CGV 잔여 좌석 감시 (알림 전용)"
+    )
+    parser.add_argument("--config", default="config.yaml", help="config.yaml 경로")
+    parser.add_argument(
+        "--state", default=None, help="state 파일 경로 (기본: state/seats.json)"
+    )
+    parser.add_argument(
+        "--dump-dir", default="dumps", help="파싱 실패 시 원문을 저장할 디렉터리"
+    )
+    parser.add_argument(
+        "--test-notify",
+        action="store_true",
+        help="설정된 알림 채널로 테스트 메시지만 보내고 종료",
+    )
+    parser.add_argument("-v", "--verbose", action="store_true")
+    args = parser.parse_args(argv)
+
+    _setup_logging(args.verbose)
+
+    notifiers = build_notifiers()
+    if not notifiers:
+        log.error(
+            "알림 채널이 하나도 설정되지 않았다. "
+            "DISCORD_WEBHOOK_URL 또는 (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID) 를 "
+            "repo secrets 에 등록할 것."
+        )
+        return 2
+
+    if args.test_notify:
+        ok = _notify_all(
+            notifiers,
+            "연결 테스트",
+            "CGV 좌석 감시 알림 채널이 정상 연결되었습니다.\n"
+            "이 메시지가 보이면 secrets 설정이 올바릅니다.",
+        )
+        return 0 if ok else 1
+
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        log.error("config 오류: %s", exc)
+        return 2
+
+    if args.state:
+        config = Config(
+            watches=config.watches,
+            polling=config.polling,
+            cooldown_minutes=config.cooldown_minutes,
+            notify_on_first_seen=config.notify_on_first_seen,
+            failure_threshold=config.failure_threshold,
+            state_path=Path(args.state),
+        )
+
+    try:
+        return run(config, notifiers, Path(args.dump_dir))
+    except ConfigError as exc:
+        log.error("config 오류: %s", exc)
+        return 2
+    except WatcherError as exc:
+        log.exception("치명적 오류: %s", exc)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,55 @@
+# CGV 잔여 좌석 감시 설정
+#
+# 이 파일은 레포에 커밋합니다. 토큰/웹훅 URL은 절대 여기 넣지 마세요.
+# 알림 채널 인증 정보는 GitHub repo secrets 에만 둡니다. (README 참고)
+
+defaults:
+  # 이 좌석 수 이상으로 열려야 알림. watches 안에서 개별로 덮어쓸 수 있습니다.
+  min_seats: 1
+
+  # 같은 회차에 대해 이 시간 안에는 다시 알리지 않습니다.
+  # 잔여석이 0↔1을 오갈 때 알림이 도배되는 걸 막습니다.
+  cooldown_minutes: 30
+
+  # 처음 보는 회차에 대해 알릴지 여부.
+  # false 권장 — true로 두면 첫 실행이나 캐시 유실 직후에 조건에 맞는
+  # 모든 회차가 한꺼번에 알림으로 쏟아집니다.
+  notify_on_first_seen: false
+
+  # 연속 실패가 이 횟수에 도달하면 장애 알림을 보냅니다.
+  failure_threshold: 3
+
+polling:
+  # 한 번의 워크플로 실행 안에서 폴링할 횟수.
+  # Actions 스케줄이 지연될 수 있으므로 한 번 깨어났을 때 여러 번 봅니다.
+  rounds_per_run: 3
+
+  # 라운드 사이 대기 [최소, 최대] 초 — 이 범위에서 무작위로 뽑습니다.
+  round_interval_sec: [60, 90]
+
+  # 개별 HTTP 요청 사이 대기 [최소, 최대] 초. 동시 요청은 하지 않습니다.
+  request_delay_sec: [2.0, 5.0]
+
+watches:
+  - name: "오디세이 영등포 IMAX"
+    movie:
+      title: "오디세이" # 부분 일치. 또는 code: "30001323" (movNo)
+    theater: "영등포타임스퀘어" # 지점명 또는 siteNo("0059")
+    screen_types: ["IMAX"] # 생략하면 모든 상영관
+    date_range:
+      start: "2026-08-11"
+      end: "2026-08-17"
+    time_range: # 생략 가능
+      start: "17:00"
+      end: "26:00" # 24 이상 = 심야. CGV 표기와 맞춥니다(24:30 = 익일 00:30)
+    min_seats: 2
+
+  - name: "스파이더맨 여의도"
+    movie:
+      title: "스파이더맨"
+    theater: "여의도"
+    date_range:
+      start: "2026-08-11"
+      end: "2026-08-14"
+    # screen_types / time_range 생략 = 전체
+    # min_seats 생략 = defaults.min_seats(1)

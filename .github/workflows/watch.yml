@@ -1,0 +1,100 @@
+name: CGV 잔여좌석 감시
+
+on:
+  schedule:
+    # 5분 간격. GitHub Actions 스케줄은 정확하지 않으며 수 분~수십 분
+    # 지연되거나 건너뛸 수 있습니다(README '스케줄 지연' 참고).
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      test_notify:
+        description: "알림 채널 연결 테스트만 수행"
+        type: boolean
+        default: false
+      verbose:
+        description: "디버그 로그 출력"
+        type: boolean
+        default: false
+
+# 앞 실행이 아직 돌고 있으면 겹치지 않게 한다.
+# cancel-in-progress: false — 진행 중인 실행을 죽이면 state 저장을 놓친다.
+concurrency:
+  group: cgv-seat-watch
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      # 캐시 키는 매 실행 고유해야 한다. actions/cache 항목은 불변이라
+      # 같은 키로는 덮어쓸 수 없기 때문이다. restore-keys 로 직전 것을 끌어온다.
+      - name: 이전 state 복원
+        uses: actions/cache/restore@v4
+        with:
+          path: state
+          key: cgv-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            cgv-state-
+
+      - name: 알림 채널 테스트
+        if: ${{ inputs.test_notify }}
+        env:
+          PYTHONPATH: src
+          PYTHONUNBUFFERED: "1"
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python -m cgv_watcher --test-notify
+
+      - name: 좌석 감시 실행
+        if: ${{ !inputs.test_notify }}
+        env:
+          PYTHONPATH: src
+          PYTHONUNBUFFERED: "1"
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python -m cgv_watcher \
+            --config config.yaml \
+            --state state/seats.json \
+            --dump-dir dumps \
+            ${{ inputs.verbose && '--verbose' || '' }}
+
+      # 실패해도 반드시 저장한다. 안 그러면 다음 실행이 기준선을 다시 잡으면서
+      # 중복 알림이 난다.
+      - name: state 저장
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state
+          key: cgv-state-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # 캐시는 직접 열어볼 수 없어서, 디버깅용으로 아티팩트도 남긴다.
+      - name: state / 덤프 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cgv-state-${{ github.run_id }}
+          path: |
+            state/
+            dumps/
+          retention-days: 7
+          if-no-files-found: ignore

@@ -1,0 +1,10 @@
+# state는 actions/cache로 실어 나른다. 레포에 커밋하지 않는다.
+state/
+dumps/
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.env
