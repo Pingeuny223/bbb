@@ -33,13 +33,14 @@ from .notify import (
     Notifier,
     build_failure_text,
     build_heartbeat_text,
+    build_listed_text,
     build_notifiers,
     build_seat_text,
     redact_secrets,
 )
 from .parser import parse_screening_dates, parse_showtimes, parse_sites
 from .ratelimit import Throttle
-from .state import StateStore, Transition
+from .state import KIND_LISTED, StateStore, Transition
 
 log = logging.getLogger("cgv_watcher")
 
@@ -217,6 +218,7 @@ def _run_round(
                     rule_names=tuple(names),
                     cooldown_minutes=config.cooldown_minutes,
                     notify_on_first_seen=config.notify_on_first_seen,
+                    notify_on_listed=config.notify_on_listed,
                     now=now,
                 )
                 if transition:
@@ -335,7 +337,10 @@ def run(config: Config, notifiers: list[Notifier], dump_dir: Path) -> int:
 
     undelivered = 0
     for transition in transitions:
-        title, body = build_seat_text(transition)
+        if transition.kind == KIND_LISTED:
+            title, body = build_listed_text(transition)
+        else:
+            title, body = build_seat_text(transition)
         if not _notify_all(notifiers, title, body):
             undelivered += 1
             # 좌석을 찾아놓고 사용자에게 못 전달한 것이므로 실패로 취급한다.

@@ -212,3 +212,80 @@ def test_heartbeat_interval(store):
 
 def test_heartbeat_can_be_disabled(store):
     assert not store.should_send_heartbeat(0, now=NOW)
+
+
+# -- 편성 등록 알림 (예매 오픈 전) --------------------------------------------
+
+
+def evaluate_listed(store, showtime, min_seats=4, now=NOW, listed=True):
+    return store.evaluate(
+        showtime=showtime, min_seats=min_seats, rule_names=("돌비",),
+        cooldown_minutes=30, notify_on_first_seen=True,
+        notify_on_listed=listed, now=now,
+    )
+
+
+def _warm(tmp_path):
+    """이전 실행이 있는 state (콜드 스타트가 아닌 상태)."""
+    path = tmp_path / "seats.json"
+    StateStore(path).save()
+    store = StateStore(path)
+    store.load()
+    assert store.loaded_from_disk
+    return store
+
+
+def test_listed_notice_fires_for_new_zero_seat_showtime(tmp_path):
+    """편성만 등록된(0석) 회차는 '편성 등록'으로 알린다."""
+    from cgv_watcher.state import KIND_LISTED
+
+    store = _warm(tmp_path)
+    tr = evaluate_listed(store, make_showtime(0))
+    assert tr is not None
+    assert tr.kind == KIND_LISTED
+
+
+def test_listed_notice_is_sent_only_once(tmp_path):
+    store = _warm(tmp_path)
+    assert evaluate_listed(store, make_showtime(0)) is not None
+    assert evaluate_listed(store, make_showtime(0), now=NOW + timedelta(minutes=3)) is None
+
+
+def test_listed_notice_does_not_swallow_the_real_opening(tmp_path):
+    """핵심 회귀 테스트.
+
+    등록 알림이 last_notified_at 을 갱신해 버리면, 몇 분 뒤 실제로 예매가
+    열렸을 때 쿨다운(30분)에 걸려 정작 필요한 알림이 통째로 묻힌다.
+    """
+    from cgv_watcher.state import KIND_LISTED, KIND_SEAT
+
+    store = _warm(tmp_path)
+    first = evaluate_listed(store, make_showtime(0))
+    assert first.kind == KIND_LISTED
+
+    # 6분 뒤 예매 오픈 — 쿨다운 30분 안이지만 반드시 알려야 한다
+    opened = evaluate_listed(store, make_showtime(195), now=NOW + timedelta(minutes=6))
+    assert opened is not None, "등록 알림이 예매 오픈 알림을 삼키면 안 된다"
+    assert opened.kind == KIND_SEAT
+    assert opened.previous_free == 0
+
+
+def test_listed_notice_disabled_by_default(tmp_path):
+    store = _warm(tmp_path)
+    assert evaluate_listed(store, make_showtime(0), listed=False) is None
+
+
+def test_listed_notice_not_sent_on_cold_start(tmp_path):
+    """콜드 스타트에서는 모든 0석 회차가 '신규'라 도배된다."""
+    store = StateStore(tmp_path / "seats.json")
+    assert not store.loaded_from_disk
+    assert evaluate_listed(store, make_showtime(0)) is None
+
+
+def test_partially_sold_new_showtime_is_not_a_listing(tmp_path):
+    """새로 보이지만 좌석이 조금 있는 회차는 '편성 등록'이 아니다.
+
+    0석일 때만 '아직 예매 불가'로 본다.
+    """
+    store = _warm(tmp_path)
+    assert evaluate_listed(store, make_showtime(2)) is None

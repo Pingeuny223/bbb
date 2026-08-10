@@ -7,7 +7,7 @@ import re
 from typing import Protocol
 
 from ..cgv_client import BOOKING_PAGE_URL
-from ..state import Transition
+from ..state import KIND_LISTED, Transition
 
 # 로그에 절대 나가면 안 되는 값들이 담긴 환경변수.
 SECRET_ENV_VARS = (
@@ -54,6 +54,7 @@ LEVEL_ERROR = "error"
 
 _LEVEL_BY_TITLE = {
     "좌석 발생": LEVEL_SEAT,
+    "편성 등록": LEVEL_INFO,
     "감시 실패": LEVEL_ERROR,
     "감시 정상 동작 중": LEVEL_INFO,
     "감시 기간 종료": LEVEL_INFO,
@@ -109,6 +110,28 @@ def build_seat_text(transition: Transition) -> tuple[str, str]:
         lines.append(f"(조건: {', '.join(transition.rule_names)})")
 
     return "좌석 발생", "\n".join(lines)
+
+
+def build_listed_text(transition: Transition) -> tuple[str, str]:
+    """편성만 등록되고 아직 예매가 열리지 않은 회차 알림.
+
+    지금은 예매할 수 없다. '이 회차가 생긴다'는 예고이며, 실제로 잡을 수 있게
+    되면 별도의 '좌석 발생' 알림이 따로 간다.
+    """
+    showtime = transition.showtime
+    lines = [
+        "아직 예매할 수 없습니다. 편성만 올라온 상태입니다.",
+        "",
+        f"🎬 {showtime.movie_name}",
+        f"🏢 {showtime.site_name or showtime.site_no}",
+        f"🎦 {showtime.display_screen()}  ({showtime.total_seats}석)",
+        f"📅 {showtime.display_date()}  ⏰ {showtime.display_time()}",
+        "",
+        "예매가 열리면 '좌석 발생' 알림이 다시 갑니다.",
+    ]
+    if transition.rule_names:
+        lines.append(f"(조건: {', '.join(transition.rule_names)})")
+    return "편성 등록", "\n".join(lines)
 
 
 def build_heartbeat_text(

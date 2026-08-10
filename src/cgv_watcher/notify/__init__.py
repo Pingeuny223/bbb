@@ -15,6 +15,7 @@ from .base import (
     Notifier,
     build_failure_text,
     build_heartbeat_text,
+    build_listed_text,
     build_seat_text,
     redact_secrets,
 )
@@ -34,6 +35,7 @@ __all__ = [
     "build_seat_text",
     "build_failure_text",
     "build_heartbeat_text",
+    "build_listed_text",
     "redact_secrets",
     "build_notifiers",
     "ENV_DISCORD_WEBHOOK",

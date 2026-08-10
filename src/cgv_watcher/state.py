@@ -22,6 +22,11 @@ log = logging.getLogger(__name__)
 STATE_VERSION = 1
 
 
+# 알림 종류.
+KIND_SEAT = "seat"  # 예매 가능한 좌석이 생겼다
+KIND_LISTED = "listed"  # 편성만 등록됐고 아직 예매 불가(0석)
+
+
 @dataclass
 class Transition:
     """알림 대상이 된 상태 변화 하나."""
@@ -30,6 +35,7 @@ class Transition:
     previous_free: int | None
     min_seats: int
     rule_names: tuple[str, ...]
+    kind: str = KIND_SEAT
 
 
 class StateStore:
@@ -134,6 +140,7 @@ class StateStore:
         rule_names: tuple[str, ...],
         cooldown_minutes: int,
         notify_on_first_seen: bool,
+        notify_on_listed: bool = False,
         now: datetime | None = None,
     ) -> Transition | None:
         """이 회차가 알림 대상인지 판정하고, state를 갱신한다.
@@ -148,18 +155,22 @@ class StateStore:
         should_notify = False
         previous_free: int | None = None
 
+        kind = KIND_SEAT
+
         if previous is None:
             # 처음 본 회차 = 편성이 새로 추가됐다는 뜻이다.
             #
             # 단, 이전 state가 없는 콜드 스타트(첫 실행, 캐시 유실)에서는
             # '모든' 회차가 처음 보는 것이므로 알리지 않는다. 안 그러면
             # 조건에 맞는 회차 전부가 한꺼번에 터진다.
-            if (
-                notify_on_first_seen
-                and self.loaded_from_disk
-                and showtime.free_seats >= min_seats
-            ):
-                should_notify = True
+            if notify_on_first_seen and self.loaded_from_disk:
+                if showtime.free_seats >= min_seats:
+                    should_notify = True
+                elif notify_on_listed and showtime.free_seats == 0:
+                    # 편성은 올라왔는데 아직 예매가 열리지 않은 상태.
+                    # 예매는 못 하지만 '편성이 확정됐다'는 정보 자체가 쓸모 있다.
+                    should_notify = True
+                    kind = KIND_LISTED
         else:
             previous_free = previous.free_seats
             if previous.free_seats < min_seats <= showtime.free_seats:
@@ -167,7 +178,7 @@ class StateStore:
 
         last_notified = previous.last_notified_at if previous else None
 
-        if should_notify and last_notified and cooldown_minutes > 0:
+        if should_notify and kind == KIND_SEAT and last_notified and cooldown_minutes > 0:
             try:
                 previous_dt = datetime.fromisoformat(last_notified)
                 if now - previous_dt < timedelta(minutes=cooldown_minutes):
@@ -184,7 +195,12 @@ class StateStore:
             free_seats=showtime.free_seats,
             total_seats=showtime.total_seats,
             last_seen_at=now_text,
-            last_notified_at=now_text if should_notify else last_notified,
+            # 등록 알림(KIND_LISTED)은 last_notified_at 을 건드리지 않는다.
+            # 갱신해 버리면 몇 분 뒤 이어질 '예매 오픈' 알림이 쿨다운에 걸려
+            # 통째로 묻힌다 — 정작 필요한 알림을 잃는 셈이다.
+            last_notified_at=(
+                now_text if (should_notify and kind == KIND_SEAT) else last_notified
+            ),
         )
 
         if not should_notify:
@@ -195,6 +211,7 @@ class StateStore:
             previous_free=previous_free,
             min_seats=min_seats,
             rule_names=rule_names,
+            kind=kind,
         )
 
     def prune(self, today: date) -> int:

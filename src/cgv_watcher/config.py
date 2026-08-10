@@ -79,6 +79,7 @@ class Config:
     polling: PollingConfig
     cooldown_minutes: int
     notify_on_first_seen: bool
+    notify_on_listed: bool
     failure_threshold: int
     heartbeat_hours: int
     state_path: Path = field(default=Path("state/seats.json"))
@@ -293,6 +294,7 @@ def load_config(path: str | Path) -> Config:
         ),
         cooldown_minutes=cooldown,
         notify_on_first_seen=bool(defaults.get("notify_on_first_seen", False)),
+        notify_on_listed=bool(defaults.get("notify_on_listed", False)),
         failure_threshold=threshold,
         heartbeat_hours=heartbeat,
     )
