@@ -53,8 +53,38 @@ def test_first_sight_does_not_notify(store):
     assert evaluate(store, make_showtime(50)) is None
 
 
-def test_first_sight_notifies_when_opted_in(store):
-    assert evaluate(store, make_showtime(50), first_seen=True) is not None
+def test_cold_start_never_notifies_even_when_opted_in(store):
+    """이전 state가 없으면 모든 회차가 '신규'다. 도배를 막는다."""
+    assert not store.loaded_from_disk
+    assert evaluate(store, make_showtime(50), first_seen=True) is None
+
+
+def test_new_showtime_notifies_when_state_exists(tmp_path):
+    """편성이 새로 추가된 경우. 이전 state가 있을 때만 알린다."""
+    path = tmp_path / "seats.json"
+    first = StateStore(path)
+    evaluate(first, make_showtime(10, seq="1"), first_seen=True)
+    first.save()
+
+    second = StateStore(path)
+    second.load()
+    assert second.loaded_from_disk
+
+    # seq="2" 는 이전 실행에 없던 새 회차 = 편성 추가
+    transition = evaluate(second, make_showtime(120, seq="2"), first_seen=True)
+    assert transition is not None
+    assert transition.previous_free is None
+
+
+def test_new_showtime_ignored_when_opted_out(tmp_path):
+    path = tmp_path / "seats.json"
+    first = StateStore(path)
+    evaluate(first, make_showtime(10, seq="1"))
+    first.save()
+
+    second = StateStore(path)
+    second.load()
+    assert evaluate(second, make_showtime(120, seq="2"), first_seen=False) is None
 
 
 def test_zero_to_available_notifies(store):

@@ -139,9 +139,16 @@ class StateStore:
         previous_free: int | None = None
 
         if previous is None:
-            # 처음 본 회차. 기본값에서는 알리지 않는다.
-            # 안 그러면 첫 실행이나 캐시 유실 직후에 모든 회차가 한꺼번에 터진다.
-            if notify_on_first_seen and showtime.free_seats >= min_seats:
+            # 처음 본 회차 = 편성이 새로 추가됐다는 뜻이다.
+            #
+            # 단, 이전 state가 없는 콜드 스타트(첫 실행, 캐시 유실)에서는
+            # '모든' 회차가 처음 보는 것이므로 알리지 않는다. 안 그러면
+            # 조건에 맞는 회차 전부가 한꺼번에 터진다.
+            if (
+                notify_on_first_seen
+                and self.loaded_from_disk
+                and showtime.free_seats >= min_seats
+            ):
                 should_notify = True
         else:
             previous_free = previous.free_seats

@@ -295,12 +295,37 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.test_notify:
-        ok = _notify_all(
-            notifiers,
-            "연결 테스트",
-            "CGV 좌석 감시 알림 채널이 정상 연결되었습니다.\n"
-            "이 메시지가 보이면 secrets 설정이 올바릅니다.",
+        # 실제 좌석 알림과 같은 형식으로 보낸다. 연결 확인과 동시에
+        # 진짜 자리가 났을 때 어떤 메시지를 받게 되는지 미리 보여준다.
+        sample = Transition(
+            showtime=Showtime(
+                site_no="0059",
+                site_name="CGV 영등포타임스퀘어",
+                screen_no="017",
+                screen_name="IMAX관",
+                screen_grade="아이맥스",
+                movie_no="30001323",
+                movie_name="오디세이",
+                movie_kind="IMAX LASER 2D",
+                rating="15세이상관람가",
+                play_date="20260815",
+                start_hhmm="1730",
+                end_hhmm="2032",
+                seq="4",
+                free_seats=2,
+                total_seats=387,
+            ),
+            previous_free=0,
+            min_seats=1,
+            rule_names=("★ 영등포 IMAX",),
         )
+        title, body = build_seat_text(sample)
+        body = (
+            "⚠️ 이것은 테스트 메시지입니다. 실제 좌석이 난 것이 아닙니다.\n"
+            "아래는 진짜 자리가 났을 때 받게 될 알림의 형식입니다.\n"
+            "──────────────\n" + body
+        )
+        ok = _notify_all(notifiers, title + " (테스트)", body)
         return 0 if ok else 1
 
     try:
