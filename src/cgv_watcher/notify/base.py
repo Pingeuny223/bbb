@@ -7,7 +7,7 @@ import re
 from typing import Protocol
 
 from ..cgv_client import BOOKING_PAGE_URL
-from ..state import KIND_LISTED, Transition
+from ..state import KIND_FILLING, KIND_LISTED, Transition
 
 # 로그에 절대 나가면 안 되는 값들이 담긴 환경변수.
 SECRET_ENV_VARS = (
@@ -55,6 +55,7 @@ LEVEL_ERROR = "error"
 _LEVEL_BY_TITLE = {
     "좌석 발생": LEVEL_SEAT,
     "편성 등록": LEVEL_INFO,
+    "좌석 줄어드는 중": LEVEL_INFO,
     "감시 실패": LEVEL_ERROR,
     "감시 정상 동작 중": LEVEL_INFO,
     "감시 기간 종료": LEVEL_INFO,
@@ -132,6 +133,30 @@ def build_listed_text(transition: Transition) -> tuple[str, str]:
     if transition.rule_names:
         lines.append(f"(조건: {', '.join(transition.rule_names)})")
     return "편성 등록", "\n".join(lines)
+
+
+def build_filling_text(transition: Transition, ratio: float) -> tuple[str, str]:
+    """잔여석이 기준 비율 아래로 떨어졌을 때의 알림.
+
+    "슬슬 찬다"는 신호다. 회차당 한 번만 보낸다.
+    """
+    showtime = transition.showtime
+    percent = (
+        100 * showtime.free_seats / showtime.total_seats if showtime.total_seats else 0
+    )
+    lines = [
+        f"잔여석이 전체의 {int(ratio * 100)}% 아래로 내려갔습니다.",
+        "",
+        f"🎬 {showtime.movie_name}",
+        f"🏢 {showtime.site_name or showtime.site_no}",
+        f"🎦 {showtime.display_screen()}",
+        f"📅 {showtime.display_date()}  ⏰ {showtime.display_time()}",
+        f"💺 잔여 {showtime.display_seats()}  ({percent:.0f}%)",
+    ]
+    if transition.previous_free is not None:
+        lines.append(f"   직전 관측: {transition.previous_free}석")
+    lines += ["", f"🔗 {BOOKING_PAGE_URL}", "", "이 회차에 대해 한 번만 알립니다."]
+    return "좌석 줄어드는 중", "\n".join(lines)
 
 
 def build_heartbeat_text(

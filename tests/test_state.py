@@ -339,3 +339,99 @@ def test_rollback_restores_exact_previous_observation(tmp_path):
     store.rollback(tr)
 
     assert store.showtimes[make_showtime(2).key] == before
+
+
+# -- 좌석 감소 경고 (alert_below_ratio) ----------------------------------------
+
+
+def evaluate_below(store, showtime, ratio=0.65, now=NOW, min_seats=4):
+    return store.evaluate(
+        showtime=showtime, min_seats=min_seats, rule_names=("돌비",),
+        cooldown_minutes=30, notify_on_first_seen=True, notify_on_listed=True,
+        alert_below_ratio=ratio, now=now,
+    )
+
+
+def dolby(free, total=195):
+    return Showtime(
+        site_no="0059", site_name="CGV 영등포타임스퀘어", screen_no="004",
+        screen_name="4관[DOLBY ATMOS] (Laser)", screen_grade="DOLBY ATMOS",
+        movie_no="30001323", movie_name="오디세이", movie_kind="2D", rating="15세",
+        play_date="20260815", start_hhmm="1920", end_hhmm="2222", seq="4",
+        free_seats=free, total_seats=total,
+    )
+
+
+def test_filling_alert_fires_on_downward_crossing(tmp_path):
+    """195석의 65% = 126.75석. 127 → 126 으로 내려올 때 울린다."""
+    from cgv_watcher.state import KIND_FILLING
+
+    store = _warm(tmp_path)
+    evaluate_below(store, dolby(130))  # 기준선 위 — 조용
+    tr = evaluate_below(store, dolby(126), now=NOW + timedelta(minutes=3))
+    assert tr is not None
+    assert tr.kind == KIND_FILLING
+    assert tr.previous_free == 130
+
+
+def test_filling_alert_fires_only_once_per_showtime(tmp_path):
+    """기준선 근처에서 오르내려도 반복되지 않아야 한다."""
+    store = _warm(tmp_path)
+    evaluate_below(store, dolby(130))
+    assert evaluate_below(store, dolby(126), now=NOW + timedelta(minutes=3)) is not None
+
+    for i, free in enumerate([130, 126, 120, 128, 100], start=2):
+        assert evaluate_below(
+            store, dolby(free), now=NOW + timedelta(minutes=3 * i + 3)
+        ) is None, f"{free}석에서 다시 울리면 안 된다"
+
+
+def test_filling_flag_survives_save_and_load(tmp_path):
+    path = tmp_path / "seats.json"
+    store = _warm(tmp_path)
+    evaluate_below(store, dolby(130))
+    evaluate_below(store, dolby(126), now=NOW + timedelta(minutes=3))
+    store.save()
+
+    reloaded = StateStore(path)
+    reloaded.load()
+    assert evaluate_below(
+        reloaded, dolby(120), now=NOW + timedelta(minutes=9)
+    ) is None, "재시작 후에도 이미 알린 회차는 다시 울리면 안 된다"
+
+
+def test_already_below_threshold_never_triggers_filling(tmp_path):
+    """이미 기준선 한참 아래인 회차는 더 줄어도 감소 경고가 없다.
+
+    지금의 IMAX(0~6석 / 387석)와 5관(32~48석 / 320석)이 이 경우다.
+    '아래로 내려오는 순간'을 잡는 것이지 '아래에 있음'을 잡는 게 아니다.
+    """
+    from cgv_watcher.state import KIND_SEAT
+
+    store = _warm(tmp_path)
+
+    # 처음 보는 회차라 '신규 편성'으로 좌석 알림이 나가는 건 정상이다.
+    first = evaluate_below(store, dolby(48, total=320))
+    assert first is not None and first.kind == KIND_SEAT
+
+    # 이후 계속 줄어들어도 감소 경고는 나오지 않는다.
+    for i, free in enumerate([44, 40, 32, 20], start=1):
+        assert evaluate_below(
+            store, dolby(free, total=320), now=NOW + timedelta(minutes=3 * i)
+        ) is None
+
+
+def test_filling_alert_disabled_when_ratio_zero(tmp_path):
+    store = _warm(tmp_path)
+    evaluate_below(store, dolby(130), ratio=0.0)
+    assert evaluate_below(store, dolby(126), ratio=0.0, now=NOW + timedelta(minutes=3)) is None
+
+
+def test_seat_alert_still_wins_over_filling(tmp_path):
+    """0석 → 좌석 발생은 감소 경고보다 우선한다."""
+    from cgv_watcher.state import KIND_SEAT
+
+    store = _warm(tmp_path)
+    evaluate_below(store, dolby(0))
+    tr = evaluate_below(store, dolby(195), now=NOW + timedelta(minutes=3))
+    assert tr is not None and tr.kind == KIND_SEAT

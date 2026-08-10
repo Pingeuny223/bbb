@@ -25,6 +25,7 @@ STATE_VERSION = 1
 # 알림 종류.
 KIND_SEAT = "seat"  # 예매 가능한 좌석이 생겼다
 KIND_LISTED = "listed"  # 편성만 등록됐고 아직 예매 불가(0석)
+KIND_FILLING = "filling"  # 잔여석이 기준 비율 아래로 떨어졌다
 
 
 @dataclass
@@ -83,6 +84,7 @@ class StateStore:
                     total_seats=int(value.get("total_seats", 0)),
                     last_seen_at=str(value.get("last_seen_at", "")),
                     last_notified_at=value.get("last_notified_at"),
+                    filling_alerted=bool(value.get("filling_alerted", False)),
                 )
             except (KeyError, TypeError, ValueError):
                 log.warning("state 항목 '%s' 이(가) 손상됨. 건너뜀", key)
@@ -116,6 +118,7 @@ class StateStore:
                     "total_seats": value.total_seats,
                     "last_seen_at": value.last_seen_at,
                     "last_notified_at": value.last_notified_at,
+                    "filling_alerted": value.filling_alerted,
                 }
                 for key, value in sorted(self.showtimes.items())
             },
@@ -144,6 +147,7 @@ class StateStore:
         cooldown_minutes: int,
         notify_on_first_seen: bool,
         notify_on_listed: bool = False,
+        alert_below_ratio: float = 0.0,
         now: datetime | None = None,
     ) -> Transition | None:
         """이 회차가 알림 대상인지 판정하고, state를 갱신한다.
@@ -178,6 +182,10 @@ class StateStore:
             previous_free = previous.free_seats
             if previous.free_seats < min_seats <= showtime.free_seats:
                 should_notify = True
+            elif self._crossed_below(previous, showtime, alert_below_ratio):
+                # 잔여석이 기준 비율 아래로 내려왔다. "슬슬 찬다"는 신호다.
+                should_notify = True
+                kind = KIND_FILLING
 
         last_notified = previous.last_notified_at if previous else None
 
@@ -204,6 +212,11 @@ class StateStore:
             last_notified_at=(
                 now_text if (should_notify and kind == KIND_SEAT) else last_notified
             ),
+            filling_alerted=(
+                True
+                if kind == KIND_FILLING and should_notify
+                else (previous.filling_alerted if previous else False)
+            ),
         )
 
         if not should_notify:
@@ -217,6 +230,18 @@ class StateStore:
             kind=kind,
             previous_state=previous,
         )
+
+    @staticmethod
+    def _crossed_below(previous: SeatState, showtime: Showtime, ratio: float) -> bool:
+        """잔여 비율이 기준선을 '아래로 넘어섰는지'.
+
+        회차당 한 번만 알린다(filling_alerted). 기준선 근처에서 좌석이
+        오르내릴 때 같은 경고가 반복되는 걸 막기 위해서다.
+        """
+        if ratio <= 0 or showtime.total_seats <= 0 or previous.filling_alerted:
+            return False
+        threshold = showtime.total_seats * ratio
+        return previous.free_seats > threshold >= showtime.free_seats
 
     def rollback(self, transition: "Transition") -> None:
         """알림 전송에 실패한 회차의 관측을 직전 값으로 되돌린다.

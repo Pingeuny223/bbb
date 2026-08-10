@@ -151,3 +151,6 @@ class SeatState:
     total_seats: int
     last_seen_at: str
     last_notified_at: str | None = None
+    # 좌석 감소 경고를 이미 보냈는지. 회차당 한 번만 보내기 위한 표시로,
+    # 임계선 근처에서 좌석이 오르내려도 반복 알림이 나가지 않게 한다.
+    filling_alerted: bool = False

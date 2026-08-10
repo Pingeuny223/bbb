@@ -32,6 +32,7 @@ from .models import KST, Showtime
 from .notify import (
     Notifier,
     build_failure_text,
+    build_filling_text,
     build_heartbeat_text,
     build_listed_text,
     build_notifiers,
@@ -40,7 +41,7 @@ from .notify import (
 )
 from .parser import parse_screening_dates, parse_showtimes, parse_sites
 from .ratelimit import Throttle
-from .state import KIND_LISTED, StateStore, Transition
+from .state import KIND_FILLING, KIND_LISTED, StateStore, Transition
 
 log = logging.getLogger("cgv_watcher")
 
@@ -124,6 +125,7 @@ def _deliver(
     store: StateStore,
     transitions,
     pending: set,
+    alert_below_ratio: float = 0.0,
 ) -> None:
     """감지 즉시 알린다.
 
@@ -138,6 +140,8 @@ def _deliver(
     for transition in transitions:
         if transition.kind == KIND_LISTED:
             title, body = build_listed_text(transition)
+        elif transition.kind == KIND_FILLING:
+            title, body = build_filling_text(transition, alert_below_ratio)
         else:
             title, body = build_seat_text(transition)
 
@@ -256,6 +260,7 @@ def _run_round(
                     cooldown_minutes=config.cooldown_minutes,
                     notify_on_first_seen=config.notify_on_first_seen,
                     notify_on_listed=config.notify_on_listed,
+                    alert_below_ratio=config.alert_below_ratio,
                     now=now,
                 )
                 if transition:
@@ -356,7 +361,13 @@ def run(config: Config, notifiers: list[Notifier], dump_dir: Path) -> int:
 
                 # 감지 즉시 발송한다. 실행이 50분 이어지므로 끝에 모아 보내면
                 # 첫 라운드에 잡은 좌석이 50분 뒤에 전달된다.
-                _deliver(notifiers, store, round_transitions, pending_delivery)
+                _deliver(
+                    notifiers,
+                    store,
+                    round_transitions,
+                    pending_delivery,
+                    config.alert_below_ratio,
+                )
 
                 # 오래 도는 실행에서 job 이 중간에 죽어도 여기까지의 관측을
                 # 잃지 않도록 라운드마다 저장한다. 파일이 작아 비용은 무시할 만하다.

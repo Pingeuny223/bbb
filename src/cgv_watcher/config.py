@@ -17,6 +17,7 @@ from .models import parse_clock_minutes
 
 DEFAULT_MIN_SEATS = 1
 DEFAULT_MIN_FREE_RATIO = 0.0  # 0 = 비율 조건 없음
+DEFAULT_ALERT_BELOW_RATIO = 0.0  # 0 = 좌석 감소 경고 끔
 DEFAULT_COOLDOWN_MINUTES = 30
 DEFAULT_ROUNDS = 3
 DEFAULT_RUN_DURATION_MINUTES = 0  # 0 = rounds_per_run 만큼만 돌고 끝
@@ -80,6 +81,7 @@ class Config:
     cooldown_minutes: int
     notify_on_first_seen: bool
     notify_on_listed: bool
+    alert_below_ratio: float
     failure_threshold: int
     heartbeat_hours: int
     state_path: Path = field(default=Path("state/seats.json"))
@@ -268,6 +270,17 @@ def load_config(path: str | Path) -> Config:
     if duration < 0:
         raise ConfigError("polling.run_duration_minutes: 0 이상이어야 함")
 
+    below = defaults.get("alert_below_ratio", DEFAULT_ALERT_BELOW_RATIO)
+    try:
+        below = float(below)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"defaults.alert_below_ratio: 0~1 사이 숫자여야 함 — {exc}") from exc
+    if not 0.0 <= below <= 1.0:
+        raise ConfigError(
+            f"defaults.alert_below_ratio: 0~1 사이여야 함 (받은 값: {below}). "
+            f"퍼센트가 아니라 비율입니다 — 65%는 0.65"
+        )
+
     heartbeat = defaults.get("heartbeat_hours", DEFAULT_HEARTBEAT_HOURS)
     try:
         heartbeat = int(heartbeat)
@@ -295,6 +308,7 @@ def load_config(path: str | Path) -> Config:
         cooldown_minutes=cooldown,
         notify_on_first_seen=bool(defaults.get("notify_on_first_seen", False)),
         notify_on_listed=bool(defaults.get("notify_on_listed", False)),
+        alert_below_ratio=below,
         failure_threshold=threshold,
         heartbeat_hours=heartbeat,
     )

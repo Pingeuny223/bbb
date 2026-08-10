@@ -14,6 +14,7 @@ import os
 from .base import (
     Notifier,
     build_failure_text,
+    build_filling_text,
     build_heartbeat_text,
     build_listed_text,
     build_seat_text,
@@ -34,6 +35,7 @@ __all__ = [
     "TelegramNotifier",
     "build_seat_text",
     "build_failure_text",
+    "build_filling_text",
     "build_heartbeat_text",
     "build_listed_text",
     "redact_secrets",
