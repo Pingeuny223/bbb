@@ -435,3 +435,58 @@ def test_seat_alert_still_wins_over_filling(tmp_path):
     evaluate_below(store, dolby(0))
     tr = evaluate_below(store, dolby(195), now=NOW + timedelta(minutes=3))
     assert tr is not None and tr.kind == KIND_SEAT
+
+
+def test_filling_alert_does_not_swallow_a_later_seat_alert(tmp_path):
+    """감소 경고가 좌석 알림의 쿨다운을 소모하면 안 된다.
+
+    앞서 '편성 등록' 알림에서 같은 함정을 겪었다. 감소 경고를 보낸 직후
+    회차가 매진됐다가 취소표가 나오면, 그게 가장 중요한 알림인데
+    쿨다운(30분)에 걸려 묻히면 안 된다.
+    """
+    from cgv_watcher.models import SeatState
+    from cgv_watcher.state import KIND_FILLING, KIND_SEAT
+
+    store = _warm(tmp_path)
+    # 좌석 알림을 거치지 않고 직전 관측만 심어둔다.
+    # (첫 관측에서 '신규 편성' 좌석 알림이 나가면 그 쿨다운 때문에
+    #  이 테스트가 검증하려는 것과 다른 이유로 억제된다.)
+    store.showtimes[dolby(130).key] = SeatState(
+        free_seats=130, total_seats=195, last_seen_at=NOW.isoformat()
+    )
+
+    warn = evaluate_below(store, dolby(126), now=NOW + timedelta(minutes=3))
+    assert warn is not None and warn.kind == KIND_FILLING
+
+    # 매진됐다가 5분 뒤 취소표 발생 — 쿨다운 30분 안이지만 반드시 알려야 한다
+    evaluate_below(store, dolby(0), now=NOW + timedelta(minutes=6))
+    seat = evaluate_below(store, dolby(8), now=NOW + timedelta(minutes=9))
+    assert seat is not None, "감소 경고가 좌석 알림을 삼키면 안 된다"
+    assert seat.kind == KIND_SEAT
+
+
+def test_filling_flag_survives_a_seat_alert(tmp_path):
+    """좌석 알림이 지나가도 '이미 감소 경고함' 표시가 지워지면 안 된다."""
+    store = _warm(tmp_path)
+    evaluate_below(store, dolby(130))
+    evaluate_below(store, dolby(126), now=NOW + timedelta(minutes=3))
+
+    evaluate_below(store, dolby(0), now=NOW + timedelta(minutes=6))
+    evaluate_below(store, dolby(180), now=NOW + timedelta(minutes=40))  # 좌석 알림
+
+    # 다시 65% 아래로 떨어져도 두 번째 감소 경고는 없다
+    assert evaluate_below(store, dolby(120), now=NOW + timedelta(minutes=80)) is None
+
+
+def test_rolled_back_filling_alert_retries(tmp_path):
+    """감소 경고 전송이 실패하면 다음 라운드에 다시 감지돼야 한다."""
+    from cgv_watcher.state import KIND_FILLING
+
+    store = _warm(tmp_path)
+    evaluate_below(store, dolby(130))
+    warn = evaluate_below(store, dolby(126), now=NOW + timedelta(minutes=3))
+    assert warn is not None
+
+    store.rollback(warn)
+    retry = evaluate_below(store, dolby(126), now=NOW + timedelta(minutes=6))
+    assert retry is not None and retry.kind == KIND_FILLING
