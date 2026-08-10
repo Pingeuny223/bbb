@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 
 from .config import WatchRule
 from .errors import ConfigError
@@ -14,6 +15,22 @@ from .models import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def required_seats(showtime: Showtime, rule: WatchRule) -> int:
+    """이 회차에서 알림이 뜨려면 몇 석이 남아 있어야 하는지.
+
+    min_seats(절대 수)와 min_free_ratio(전체 대비 비율) 중 더 엄격한 쪽을 쓴다.
+    비율 조건을 두는 이유: 좌석이 거의 다 나간 회차는 남은 자리가 맨 앞줄이나
+    구석뿐이라, 숫자상 4석이 있어도 여럿이 나란히 앉을 수 없다.
+
+    예) 387석 IMAX + ratio 0.5 -> 194석 이상 남아야 알림.
+        사실상 신규 편성이나 대량 취소일 때만 걸린다.
+    """
+    need = rule.min_seats
+    if rule.min_free_ratio > 0 and showtime.total_seats > 0:
+        need = max(need, math.ceil(showtime.total_seats * rule.min_free_ratio))
+    return need
 
 
 def matches_screen(showtime: Showtime, screen_types: tuple[str, ...]) -> bool:

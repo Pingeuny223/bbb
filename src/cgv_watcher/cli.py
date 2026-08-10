@@ -27,7 +27,7 @@ from pathlib import Path
 from .cgv_client import CgvClient
 from .config import Config, WatchRule, load_config
 from .errors import ConfigError, FetchError, ParseError, WatcherError
-from .matcher import matches, resolve_site_no
+from .matcher import matches, required_seats, resolve_site_no
 from .models import KST, Showtime
 from .notify import (
     Notifier,
@@ -152,14 +152,14 @@ def _run_round(
     targets: dict[str, list[WatchRule]],
     date_cache: dict[str, list[str]],
     dump_dir: Path,
-) -> tuple[list[Transition], list[Showtime]]:
+) -> tuple[list[Transition], list[tuple[Showtime, int]]]:
     """폴링 1라운드.
 
     (전이된 회차, 이번 라운드에서 조건에 맞은 회차 전부)를 반환한다.
     두 번째 값은 생존 신고에 현재 현황을 싣는 데 쓴다.
     """
     transitions: list[Transition] = []
-    snapshot: list[Showtime] = []
+    snapshot: list[tuple[Showtime, int]] = []
     now = datetime.now(KST)
 
     for site_no, rules in targets.items():
@@ -194,20 +194,23 @@ def _run_round(
                 for rule in rules:
                     if not matches(showtime, rule):
                         continue
+                    # 규칙마다 요구 좌석이 다르다(일반관은 비율 조건이 붙는 등).
+                    # 같은 회차를 여러 규칙이 보면 가장 느슨한 쪽을 따른다.
+                    need = required_seats(showtime, rule)
                     existing = matched.get(showtime.key)
                     if existing is None:
-                        matched[showtime.key] = (showtime, rule.min_seats, [rule.name])
+                        matched[showtime.key] = (showtime, need, [rule.name])
                     else:
-                        _, min_seats, names = existing
+                        _, prev_need, names = existing
                         names.append(rule.name)
                         matched[showtime.key] = (
                             showtime,
-                            min(min_seats, rule.min_seats),
+                            min(prev_need, need),
                             names,
                         )
 
             for showtime, min_seats, names in matched.values():
-                snapshot.append(showtime)
+                snapshot.append((showtime, min_seats))
                 transition = store.evaluate(
                     showtime=showtime,
                     min_seats=min_seats,
@@ -264,7 +267,7 @@ def run(config: Config, notifiers: list[Notifier], dump_dir: Path) -> int:
 
     throttle = Throttle(config.polling.request_delay_sec)
     transitions: list[Transition] = []
-    last_snapshot: list[Showtime] = []
+    last_snapshot: list[tuple[Showtime, int]] = []
     failure: Exception | None = None
 
     with CgvClient(throttle) as client:
@@ -338,8 +341,7 @@ def run(config: Config, notifiers: list[Notifier], dump_dir: Path) -> int:
     now = datetime.now(KST)
     if store.should_send_heartbeat(config.heartbeat_hours, now=now):
         title, body = build_heartbeat_text(
-            showtimes=last_snapshot,
-            min_seats=min(rule.min_seats for rule in config.watches),
+            rows=last_snapshot,
             last_watch_day=max(rule.date_range.end for rule in config.watches),
             checked_at=now.strftime("%Y-%m-%d %H:%M KST"),
         )

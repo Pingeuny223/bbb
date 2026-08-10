@@ -16,6 +16,7 @@ from .errors import ConfigError
 from .models import parse_clock_minutes
 
 DEFAULT_MIN_SEATS = 1
+DEFAULT_MIN_FREE_RATIO = 0.0  # 0 = 비율 조건 없음
 DEFAULT_COOLDOWN_MINUTES = 30
 DEFAULT_ROUNDS = 3
 DEFAULT_ROUND_INTERVAL = (60.0, 90.0)
@@ -54,6 +55,9 @@ class WatchRule:
     date_range: DateRange
     time_range: TimeRange | None
     min_seats: int
+    # 전체 좌석 대비 최소 잔여 비율(0~1). 0.5 면 절반 이상 남아 있을 때만 알린다.
+    # 좌석이 얼마 안 남은 회차는 남은 자리가 구석뿐이라 여럿이 앉기 어렵다.
+    min_free_ratio: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -172,6 +176,21 @@ def _parse_watch(raw: Any, index: int, defaults: dict[str, Any]) -> WatchRule:
     if min_seats < 1:
         raise ConfigError(f"{where}.min_seats: 1 이상이어야 함")
 
+    ratio = mapping.get(
+        "min_free_ratio", defaults.get("min_free_ratio", DEFAULT_MIN_FREE_RATIO)
+    )
+    try:
+        ratio = float(ratio)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(
+            f"{where}.min_free_ratio: 0~1 사이 숫자여야 함 (받은 값: {ratio!r})"
+        ) from exc
+    if not 0.0 <= ratio <= 1.0:
+        raise ConfigError(
+            f"{where}.min_free_ratio: 0~1 사이여야 함 (받은 값: {ratio}). "
+            f"퍼센트가 아니라 비율입니다 — 50%는 0.5"
+        )
+
     return WatchRule(
         name=name,
         theater=str(theater).strip(),
@@ -181,6 +200,7 @@ def _parse_watch(raw: Any, index: int, defaults: dict[str, Any]) -> WatchRule:
         date_range=DateRange(start, end),
         time_range=_parse_time_range(mapping.get("time_range"), f"{where}.time_range"),
         min_seats=min_seats,
+        min_free_ratio=ratio,
     )
 
 

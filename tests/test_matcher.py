@@ -8,7 +8,12 @@ import pytest
 
 from cgv_watcher.config import DateRange, TimeRange, WatchRule
 from cgv_watcher.errors import ConfigError
-from cgv_watcher.matcher import matches, matches_screen, resolve_site_no
+from cgv_watcher.matcher import (
+    matches,
+    matches_screen,
+    required_seats,
+    resolve_site_no,
+)
 from cgv_watcher.models import Showtime
 
 SITES = {
@@ -54,6 +59,7 @@ def make_rule(**overrides) -> WatchRule:
         date_range=DateRange(date(2026, 8, 11), date(2026, 8, 17)),
         time_range=None,
         min_seats=1,
+        min_free_ratio=0.0,
     )
     base.update(overrides)
     return WatchRule(**base)
@@ -149,3 +155,53 @@ def test_ambiguous_name_fails_loudly():
 def test_unknown_theater_fails():
     with pytest.raises(ConfigError, match="찾을 수 없음"):
         resolve_site_no(make_rule(theater="없는지점"), SITES)
+
+
+# -- 필요 좌석 수 (min_seats + min_free_ratio) --------------------------------
+
+
+def test_required_seats_without_ratio():
+    """비율 조건이 없으면 min_seats 그대로. 특별관은 이쪽."""
+    rule = make_rule(min_seats=4, min_free_ratio=0.0)
+    assert required_seats(make_showtime(total_seats=387), rule) == 4
+
+
+def test_required_seats_with_ratio_uses_stricter_side():
+    """일반관: 절반 이상 남아야 한다. 320석 -> 160석."""
+    rule = make_rule(min_seats=4, min_free_ratio=0.5)
+    assert required_seats(make_showtime(total_seats=320), rule) == 160
+
+
+def test_required_seats_ratio_rounds_up():
+    """반올림이 아니라 올림. 기준이 느슨해지면 안 된다."""
+    rule = make_rule(min_seats=1, min_free_ratio=0.5)
+    assert required_seats(make_showtime(total_seats=387), rule) == 194  # 193.5 -> 194
+
+
+def test_required_seats_min_seats_wins_when_larger():
+    """비율이 낮아도 min_seats 아래로는 안 내려간다."""
+    rule = make_rule(min_seats=10, min_free_ratio=0.01)
+    assert required_seats(make_showtime(total_seats=100), rule) == 10
+
+
+def test_imax_cancellation_does_not_meet_ratio_but_meets_plain_rule():
+    """실제 상황 재현.
+
+    IMAX 387석에 4석이 남았다. 특별관 규칙(비율 없음)에서는 알림 대상이지만,
+    같은 회차에 비율 0.5를 걸면 걸리지 않는다.
+    """
+    showtime = make_showtime(total_seats=387, free_seats=4)
+    assert showtime.free_seats >= required_seats(
+        showtime, make_rule(min_seats=4, min_free_ratio=0.0)
+    )
+    assert showtime.free_seats < required_seats(
+        showtime, make_rule(min_seats=4, min_free_ratio=0.5)
+    )
+
+
+def test_newly_opened_showtime_passes_ratio():
+    """새로 편성된 회차는 거의 비어 있으므로 비율 조건을 통과한다."""
+    showtime = make_showtime(total_seats=320, free_seats=320)
+    assert showtime.free_seats >= required_seats(
+        showtime, make_rule(min_seats=4, min_free_ratio=0.5)
+    )

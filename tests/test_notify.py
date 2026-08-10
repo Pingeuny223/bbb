@@ -207,8 +207,7 @@ def test_heartbeat_marks_rows_above_threshold():
     from cgv_watcher.notify.base import build_heartbeat_text
 
     title, body = build_heartbeat_text(
-        showtimes=[_sample_showtime(7, "1400"), _sample_showtime(2, "1730")],
-        min_seats=4,
+        rows=[(_sample_showtime(7, "1400"), 4), (_sample_showtime(2, "1730"), 4)],
         last_watch_day=date(2026, 8, 15),
         checked_at="2026-08-10 14:30 KST",
     )
@@ -219,6 +218,7 @@ def test_heartbeat_marks_rows_above_threshold():
     assert "7석(총 387석)" in body
     assert "2석(총 387석)" in body
     assert "영등포타임스퀘어 IMAX관" in body
+    assert "기준 4석" in body
     assert "CGV 영등포" not in body  # 목록에서는 'CGV ' 접두사를 뗀다
 
 
@@ -228,8 +228,7 @@ def test_heartbeat_warns_when_nothing_matches():
     from cgv_watcher.notify.base import build_heartbeat_text
 
     _, body = build_heartbeat_text(
-        showtimes=[], min_seats=4,
-        last_watch_day=date(2026, 8, 15), checked_at="x",
+        rows=[], last_watch_day=date(2026, 8, 15), checked_at="x",
     )
     assert "회차가 하나도 없습니다" in body
 

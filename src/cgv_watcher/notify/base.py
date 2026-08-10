@@ -112,33 +112,35 @@ def build_seat_text(transition: Transition) -> tuple[str, str]:
 
 
 def build_heartbeat_text(
-    showtimes: list,
-    min_seats: int,
+    rows: list,
     last_watch_day,
     checked_at: str,
     max_rows: int = 24,
 ) -> tuple[str, str]:
     """생존 신고의 (제목, 본문).
 
+    rows 는 (Showtime, 알림에 필요한 좌석 수) 튜플 목록이다.
+    필요 좌석은 회차마다 다르다 — 일반관에는 비율 조건이 붙어서 IMAX보다
+    훨씬 많은 자리가 남아야 알림이 뜬다. 그래서 회차별로 함께 보여준다.
+
     '알림이 없다'가 정상인지 죽은 것인지 구분하기 위한 메시지다.
     기왕 보내는 김에 현재 잔여석 현황도 같이 담아 한 번에 파악되게 한다.
     """
     lines = [
         f"🕐 마지막 확인: {checked_at}",
-        f"👀 감시 중인 회차: {len(showtimes)}건",
-        f"🎯 알림 기준: {min_seats}석 이상",
+        f"👀 감시 중인 회차: {len(rows)}건",
         f"📆 감시 종료일: {last_watch_day}",
     ]
 
-    if showtimes:
-        lines += ["", "현재 잔여석"]
-        ordered = sorted(showtimes, key=lambda s: (s.play_date, s.start_minutes))
-        for showtime in ordered[:max_rows]:
-            mark = "🔔" if showtime.free_seats >= min_seats else "  "
+    if rows:
+        lines += ["", "현재 잔여석  (괄호 안은 알림이 뜨는 기준)"]
+        ordered = sorted(rows, key=lambda r: (r[0].play_date, r[0].start_minutes))
+        for showtime, needed in ordered[:max_rows]:
+            mark = "🔔" if showtime.free_seats >= needed else "  "
             lines.append(
                 f"{mark} {showtime.display_date()} {showtime.display_time()} "
                 f"{showtime.display_site()} {showtime.display_screen()} — "
-                f"{showtime.display_seats()}"
+                f"{showtime.display_seats()} · 기준 {needed}석"
             )
         if len(ordered) > max_rows:
             lines.append(f"   … 외 {len(ordered) - max_rows}건")
