@@ -15,7 +15,7 @@ from cgv_watcher.notify import build_notifiers, redact_secrets
 from cgv_watcher.notify.discord import DiscordNotifier
 from cgv_watcher.notify.telegram import TelegramNotifier
 
-WEBHOOK = "https://discord.com/api/webhooks/1536219021333233725/AbCdEf-secret_TOKEN123"
+WEBHOOK = "https://discord.com/api/webhooks/111111111111111111/AbCdEf-secret_TOKEN123"
 BOT_TOKEN = "7891234567:AAF-realbottokenvalue12345678"
 
 
@@ -77,11 +77,11 @@ def test_redacts_split_webhook_path():
     """
     text = (
         "HTTPSConnectionPool(host='discord.com', port=443): Max retries exceeded "
-        "with url: /api/webhooks/1536219021333233725/AbCdEf-secret_TOKEN123"
+        "with url: /api/webhooks/111111111111111111/AbCdEf-secret_TOKEN123"
     )
     result = redact_secrets(text, {})  # 환경변수가 없어도 잡아야 한다
     assert "secret_TOKEN123" not in result
-    assert "1536219021333233725" not in result
+    assert "111111111111111111" not in result
 
 
 def test_redacts_split_telegram_path():
@@ -95,7 +95,7 @@ def test_discord_network_error_does_not_leak_url():
     notifier = DiscordNotifier(WEBHOOK)
     boom = requests.ConnectionError(
         f"HTTPSConnectionPool(host='discord.com', port=443): "
-        f"Max retries exceeded with url: /api/webhooks/1536219021333233725/"
+        f"Max retries exceeded with url: /api/webhooks/111111111111111111/"
         f"AbCdEf-secret_TOKEN123"
     )
     with mock.patch("requests.post", side_effect=boom):
@@ -140,3 +140,47 @@ def test_short_secret_value_does_not_mangle_logs():
     """chat_id 같은 짧은 값으로 로그가 뭉개지면 안 된다."""
     text = "지점 12345 회차 수신"
     assert redact_secrets(text, {"TELEGRAM_CHAT_ID": "12345"}) == text
+
+
+# -- 로깅 파이프라인 ---------------------------------------------------------
+
+
+def test_verbose_does_not_enable_urllib3_debug_logging():
+    """--verbose 로 urllib3 DEBUG 를 켜면 요청 URL 전체가 로그에 남는다.
+
+    디스코드 웹훅과 텔레그램 토큰은 URL 경로 안에 있으므로 실제 유출이 된다.
+    (관측된 실제 로그:
+     urllib3.connectionpool: https://discord.com:443 "POST /api/webhooks/<id>/<token>")
+    """
+    import logging
+
+    from cgv_watcher.cli import _setup_logging
+
+    _setup_logging(verbose=True)
+    assert logging.getLogger().level == logging.DEBUG
+    assert logging.getLogger("urllib3").level == logging.WARNING
+    assert logging.getLogger("requests").level == logging.WARNING
+
+
+def test_log_filter_redacts_third_party_records():
+    """우리 코드가 아닌 라이브러리가 찍어도 걸러져야 한다."""
+    import logging
+
+    from cgv_watcher.cli import _setup_logging
+
+    _setup_logging(verbose=True)
+    handler = logging.getLogger().handlers[0]
+
+    record = logging.LogRecord(
+        name="urllib3.connectionpool",
+        level=logging.DEBUG,
+        pathname=__file__,
+        lineno=1,
+        msg='https://discord.com:443 "POST %s HTTP/1.1" 204',
+        args=("/api/webhooks/111111111111111111/AbCdEf-secret_TOKEN123",),
+        exc_info=None,
+    )
+    for log_filter in handler.filters:
+        log_filter.filter(record)
+
+    assert "secret_TOKEN123" not in record.getMessage()

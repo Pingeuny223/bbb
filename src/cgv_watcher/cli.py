@@ -44,13 +44,46 @@ log = logging.getLogger("cgv_watcher")
 FAILURE_ALERT_COOLDOWN_MINUTES = 60
 
 
+class _RedactingFilter(logging.Filter):
+    """모든 로그 레코드에서 비밀값을 지운다.
+
+    우리 코드만 조심해서는 부족하다. urllib3 는 DEBUG 레벨에서 요청 경로를
+    통째로 찍는데, 디스코드 웹훅과 텔레그램 봇 토큰은 경로 안에 들어 있다.
+    로그가 만들어지는 마지막 지점에서 일괄 처리한다.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True
+        cleaned = redact_secrets(message)
+        if cleaned != message:
+            record.msg = cleaned
+            record.args = ()
+        return True
+
+
 def _setup_logging(verbose: bool) -> None:
-    logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO,
-        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        stream=sys.stdout,
+    handler = logging.StreamHandler(stream=sys.stdout)
+    handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
     )
+    handler.addFilter(_RedactingFilter())
+
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(logging.DEBUG if verbose else logging.INFO)
+
+    # --verbose 를 켜도 HTTP 라이브러리는 조용히 시킨다.
+    # urllib3 의 DEBUG 로그는 요청 URL 전체(= 토큰 포함)를 남긴다.
+    # 위 필터가 한 번 더 막지만, 애초에 만들지 않는 편이 낫다.
+    for name in ("urllib3", "requests", "charset_normalizer", "chardet"):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 def _dump_raw(client: CgvClient, dump_dir: Path, label: str) -> Path | None:
