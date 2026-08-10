@@ -1,0 +1,51 @@
+name: 테스트
+
+# 감시 워크플로가 실제로 돌기 전에 깨진 코드를 걸러낸다.
+# (Config 에 필드를 추가하고 CLI 재조립을 안 고쳐서 실행이 즉시 죽은 적이 있다.)
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          # 감시 워크플로와 같은 버전으로 맞춘다.
+          python-version: "3.11"
+          cache: pip
+
+      - name: 의존성 설치
+        run: |
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: 테스트
+        env:
+          PYTHONPATH: src
+        run: python -m pytest -q
+
+      # 실제 config.yaml 이 스키마에 맞는지도 본다.
+      # 테스트는 통과하는데 config 오타로 감시가 멈추는 걸 막는다.
+      - name: config.yaml 검증
+        env:
+          PYTHONPATH: src
+        run: |
+          python - <<'PY'
+          from cgv_watcher.config import load_config
+          config = load_config("config.yaml")
+          print(f"규칙 {len(config.watches)}개 / 최소 {min(w.min_seats for w in config.watches)}석")
+          for rule in config.watches:
+              print(f"  - {rule.name}: {rule.theater} {rule.screen_types or '(전체)'} "
+                    f"{rule.date_range.start}~{rule.date_range.end}")
+          PY

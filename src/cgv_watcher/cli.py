@@ -20,6 +20,7 @@ import random
 import sys
 import time
 from collections import defaultdict
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -430,14 +431,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.state:
-        config = Config(
-            watches=config.watches,
-            polling=config.polling,
-            cooldown_minutes=config.cooldown_minutes,
-            notify_on_first_seen=config.notify_on_first_seen,
-            failure_threshold=config.failure_threshold,
-            state_path=Path(args.state),
-        )
+        # replace 를 쓴다. 필드를 손으로 나열하면 Config 에 필드를 추가할 때마다
+        # 여기를 같이 고쳐야 하고, 잊으면 --state 를 준 실행만 터진다(실제로 겪음).
+        config = replace(config, state_path=Path(args.state))
 
     try:
         return run(config, notifiers, Path(args.dump_dir))
