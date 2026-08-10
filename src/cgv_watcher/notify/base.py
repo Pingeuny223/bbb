@@ -2,10 +2,49 @@
 
 from __future__ import annotations
 
+import os
+import re
 from typing import Protocol
 
 from ..cgv_client import BOOKING_PAGE_URL
 from ..state import Transition
+
+# 로그에 절대 나가면 안 되는 값들이 담긴 환경변수.
+SECRET_ENV_VARS = (
+    "DISCORD_WEBHOOK_URL",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_CHAT_ID",
+)
+
+# 값이 통째로 나타나지 않고 조각나서 찍히는 경우까지 잡는 패턴.
+# 예: requests 예외는 host 와 path 를 따로 찍어서 GitHub 의 secret 마스킹을
+#     빠져나간다. public 레포의 Actions 로그는 누구나 볼 수 있으므로
+#     토큰이 들어가는 경로 형태 자체를 지운다.
+_SECRET_PATTERNS = (
+    re.compile(r"/api/webhooks/\d+/[\w.\-]+"),  # 디스코드 웹훅 경로
+    re.compile(r"/bot\d+:[\w.\-]+"),  # 텔레그램 봇 토큰 경로
+)
+
+
+def redact_secrets(text: str, env: dict | None = None) -> str:
+    """로그로 나가기 전에 비밀값을 가린다.
+
+    notifier 들이 이미 예외 메시지를 정제하지만, 예상 못 한 경로로 값이
+    새는 경우에 대비한 마지막 방어선이다.
+    """
+    source = env if env is not None else os.environ
+    result = text
+
+    for name in SECRET_ENV_VARS:
+        value = (source.get(name) or "").strip()
+        # 너무 짧은 값을 치환하면 멀쩡한 로그가 뭉개진다.
+        if len(value) >= 8:
+            result = result.replace(value, f"<{name} 가려짐>")
+
+    for pattern in _SECRET_PATTERNS:
+        result = pattern.sub("/<가려짐>", result)
+
+    return result
 
 
 class Notifier(Protocol):

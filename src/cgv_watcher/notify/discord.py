@@ -37,9 +37,18 @@ class DiscordNotifier:
 
         # Discord 웹훅은 초과 시 429 + retry_after 를 준다. 그 값을 존중한다.
         for attempt in range(3):
-            response = requests.post(
-                self._webhook_url, json=payload, timeout=self._timeout
-            )
+            try:
+                response = requests.post(
+                    self._webhook_url, json=payload, timeout=self._timeout
+                )
+            except requests.RequestException as exc:
+                # requests 예외 메시지에는 요청 URL이 그대로 들어간다.
+                # 웹훅 URL은 경로에 토큰이 들어있는 인증 수단이고, public 레포의
+                # Actions 로그는 누구나 볼 수 있다. 원본 메시지는 버리고
+                # 예외 종류만 남긴다. (from None 으로 체인도 끊는다)
+                raise RuntimeError(
+                    f"Discord 웹훅 전송 실패: {type(exc).__name__}"
+                ) from None
             if response.status_code == 429:
                 try:
                     wait = float(response.json().get("retry_after", 1.0))

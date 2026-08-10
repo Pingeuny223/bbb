@@ -38,7 +38,14 @@ class TelegramNotifier:
         }
 
         for attempt in range(3):
-            response = requests.post(url, json=payload, timeout=self._timeout)
+            try:
+                response = requests.post(url, json=payload, timeout=self._timeout)
+            except requests.RequestException as exc:
+                # 텔레그램은 URL 경로에 봇 토큰이 들어간다. requests 예외 메시지는
+                # 요청 URL을 그대로 포함하므로 원본을 로그에 흘리면 안 된다.
+                raise RuntimeError(
+                    f"Telegram 전송 실패: {type(exc).__name__}"
+                ) from None
             if response.status_code == 429:
                 try:
                     wait = float(

@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import os
 
-from .base import Notifier, build_failure_text, build_seat_text
+from .base import Notifier, build_failure_text, build_seat_text, redact_secrets
 from .discord import DiscordNotifier
 from .telegram import TelegramNotifier
 
@@ -27,6 +27,7 @@ __all__ = [
     "TelegramNotifier",
     "build_seat_text",
     "build_failure_text",
+    "redact_secrets",
     "build_notifiers",
     "ENV_DISCORD_WEBHOOK",
     "ENV_TELEGRAM_TOKEN",

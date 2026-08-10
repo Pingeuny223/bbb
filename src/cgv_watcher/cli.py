@@ -28,7 +28,13 @@ from .config import Config, WatchRule, load_config
 from .errors import ConfigError, FetchError, ParseError, WatcherError
 from .matcher import matches, resolve_site_no
 from .models import KST, Showtime
-from .notify import Notifier, build_failure_text, build_notifiers, build_seat_text
+from .notify import (
+    Notifier,
+    build_failure_text,
+    build_notifiers,
+    build_seat_text,
+    redact_secrets,
+)
 from .parser import parse_screening_dates, parse_showtimes, parse_sites
 from .ratelimit import Throttle
 from .state import StateStore, Transition
@@ -69,7 +75,11 @@ def _notify_all(notifiers: list[Notifier], title: str, body: str) -> bool:
             log.info("[%s] 알림 전송 완료: %s", notifier.name, title)
             ok = True
         except Exception as exc:  # 알림 실패가 감시를 죽이면 안 된다
-            log.error("[%s] 알림 전송 실패: %s", notifier.name, exc)
+            # 예외 메시지에 토큰이나 웹훅 URL이 섞일 수 있다.
+            # public 레포의 Actions 로그는 누구나 볼 수 있으므로 반드시 가린다.
+            log.error(
+                "[%s] 알림 전송 실패: %s", notifier.name, redact_secrets(str(exc))
+            )
     return ok
 
 
