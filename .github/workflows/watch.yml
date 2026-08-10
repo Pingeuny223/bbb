@@ -71,7 +71,7 @@ jobs:
       # 캐시 키는 매 실행 고유해야 한다. actions/cache 항목은 불변이라
       # 같은 키로는 덮어쓸 수 없기 때문이다. restore-keys 로 직전 것을 끌어온다.
       #
-      # 프리픽스의 v2 는 기준선 세대다. config.yaml 의 감시 규칙을 '넓혔을' 때
+      # 프리픽스의 v3 는 기준선 세대다. config.yaml 의 감시 규칙을 '넓혔을' 때
       # (상영관 추가, 날짜/시간 범위 확대) 이 숫자를 올려라. 그러면 다음 실행이
       # 콜드 스타트가 되어 기준선을 다시 잡고, 새로 범위에 들어온 회차들이
       # '신규 편성'으로 오인돼 알림이 쏟아지는 걸 막는다.
@@ -79,9 +79,9 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: state
-          key: cgv-state-v2-${{ github.run_id }}-${{ github.run_attempt }}
+          key: cgv-state-v3-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            cgv-state-v2-
+            cgv-state-v3-
 
       - name: 알림 채널 테스트
         if: ${{ inputs.test_notify }}
@@ -115,7 +115,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: state
-          key: cgv-state-v2-${{ github.run_id }}-${{ github.run_attempt }}
+          key: cgv-state-v3-${{ github.run_id }}-${{ github.run_attempt }}
 
       # 캐시는 직접 열어볼 수 없어서, 디버깅용으로 아티팩트도 남긴다.
       - name: state / 덤프 업로드
