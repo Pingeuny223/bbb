@@ -98,7 +98,7 @@ def build_seat_text(transition: Transition) -> tuple[str, str]:
         f"🏢 {showtime.site_name or showtime.site_no}",
         f"🎦 {showtime.display_screen()}",
         f"📅 {showtime.display_date()}  ⏰ {showtime.display_time()}",
-        f"💺 잔여 {showtime.free_seats}석 / 전체 {showtime.total_seats}석  ({change})",
+        f"💺 잔여 {showtime.display_seats()}  ({change})",
         "",
         f"🔗 {BOOKING_PAGE_URL}",
         "",
@@ -116,7 +116,7 @@ def build_heartbeat_text(
     min_seats: int,
     last_watch_day,
     checked_at: str,
-    max_rows: int = 12,
+    max_rows: int = 24,
 ) -> tuple[str, str]:
     """생존 신고의 (제목, 본문).
 
@@ -137,7 +137,8 @@ def build_heartbeat_text(
             mark = "🔔" if showtime.free_seats >= min_seats else "  "
             lines.append(
                 f"{mark} {showtime.display_date()} {showtime.display_time()} "
-                f"{showtime.display_screen()} — {showtime.free_seats}석"
+                f"{showtime.display_site()} {showtime.display_screen()} — "
+                f"{showtime.display_seats()}"
             )
         if len(ordered) > max_rows:
             lines.append(f"   … 외 {len(ordered) - max_rows}건")

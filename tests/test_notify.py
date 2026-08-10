@@ -213,8 +213,13 @@ def test_heartbeat_marks_rows_above_threshold():
         checked_at="2026-08-10 14:30 KST",
     )
     assert title == "감시 정상 동작 중"
-    assert "7석" in body and "2석" in body
     assert body.count("🔔") == 1  # 4석 이상인 회차만 표시
+
+    # 잔여석은 '잔여(총 N석)' 형태로, 지점명도 함께 보여야 한다.
+    assert "7석(총 387석)" in body
+    assert "2석(총 387석)" in body
+    assert "영등포타임스퀘어 IMAX관" in body
+    assert "CGV 영등포" not in body  # 목록에서는 'CGV ' 접두사를 뗀다
 
 
 def test_heartbeat_warns_when_nothing_matches():

@@ -119,6 +119,15 @@ class Showtime:
         m = self.start_minutes
         return f"{m // 60:02d}:{m % 60:02d}"
 
+    def display_site(self) -> str:
+        """지점명. 목록에서 쓰기 좋게 'CGV ' 접두사를 뗀다."""
+        name = self.site_name or self.site_no
+        return name[4:] if name.startswith("CGV ") else name
+
+    def display_seats(self) -> str:
+        """'9석(총 387석)' 형태."""
+        return f"{self.free_seats}석(총 {self.total_seats}석)"
+
     def display_screen(self) -> str:
         """상영관 표기.
 
