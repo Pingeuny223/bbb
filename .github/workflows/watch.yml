@@ -32,10 +32,30 @@ jobs:
 
     steps:
       - name: 체크아웃
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+
+      # secrets 미등록은 흔한 첫 실수다. 파이썬까지 가서 종료코드 2로 죽는 대신
+      # 여기서 무엇을 어디에 넣어야 하는지 알려주고 멈춘다.
+      - name: 알림 채널 설정 점검
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -n "$DISCORD_WEBHOOK_URL" ]; then
+            echo "알림 채널: Discord"
+          elif [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            echo "알림 채널: Telegram"
+          else
+            echo "::error title=알림 채널 미설정::repo secret 이 등록되지 않았습니다."
+            echo "Settings → Secrets and variables → Actions → New repository secret"
+            echo "  DISCORD_WEBHOOK_URL  (디스코드 웹훅 URL)"
+            echo "또는 TELEGRAM_BOT_TOKEN 과 TELEGRAM_CHAT_ID 를 둘 다 등록하세요."
+            exit 1
+          fi
 
       - name: Python 설정
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
@@ -43,10 +63,15 @@ jobs:
       - name: 의존성 설치
         run: pip install -r requirements.txt
 
+      # 캐시 저장 스텝은 경로가 없으면 실패한다. 실행이 도중에 죽어도
+      # 저장 단계가 깨지지 않도록 미리 만들어 둔다.
+      - name: 작업 디렉터리 준비
+        run: mkdir -p state dumps
+
       # 캐시 키는 매 실행 고유해야 한다. actions/cache 항목은 불변이라
       # 같은 키로는 덮어쓸 수 없기 때문이다. restore-keys 로 직전 것을 끌어온다.
       - name: 이전 state 복원
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: state
           key: cgv-state-${{ github.run_id }}-${{ github.run_attempt }}
@@ -82,7 +107,7 @@ jobs:
       # 중복 알림이 난다.
       - name: state 저장
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: state
           key: cgv-state-${{ github.run_id }}-${{ github.run_attempt }}
@@ -90,7 +115,7 @@ jobs:
       # 캐시는 직접 열어볼 수 없어서, 디버깅용으로 아티팩트도 남긴다.
       - name: state / 덤프 업로드
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cgv-state-${{ github.run_id }}
           path: |
