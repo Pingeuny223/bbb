@@ -289,3 +289,53 @@ def test_partially_sold_new_showtime_is_not_a_listing(tmp_path):
     """
     store = _warm(tmp_path)
     assert evaluate_listed(store, make_showtime(2)) is None
+
+
+# -- 전송 실패 되돌리기 -------------------------------------------------------
+
+
+def test_rollback_lets_failed_alert_retry(tmp_path):
+    """알림 전송이 실패하면 다음 라운드에 다시 감지돼야 한다.
+
+    evaluate 는 '알리기로 결정한 시점'에 state 를 갱신한다. 전송이 실패했는데
+    되돌리지 않으면 다음 라운드에는 전이가 성립하지 않아 그 알림이 영구히
+    사라진다 — 정작 자리가 났을 때 놓치는 최악의 경우다.
+    """
+    store = _warm(tmp_path)
+    evaluate_listed(store, make_showtime(0))
+
+    opened = evaluate_listed(store, make_showtime(195), now=NOW + timedelta(minutes=3))
+    assert opened is not None
+
+    # 전송 실패 → 되돌림
+    store.rollback(opened)
+
+    retry = evaluate_listed(store, make_showtime(195), now=NOW + timedelta(minutes=6))
+    assert retry is not None, "되돌린 뒤에는 같은 전이를 다시 감지해야 한다"
+    assert retry.previous_free == 0
+
+
+def test_rollback_of_brand_new_showtime_removes_it(tmp_path):
+    """이전에 본 적 없는 회차는 되돌리면 아예 없던 것이 된다."""
+    store = _warm(tmp_path)
+    tr = evaluate_listed(store, make_showtime(0))
+    assert tr is not None
+    assert make_showtime(0).key in store.showtimes
+
+    store.rollback(tr)
+    assert make_showtime(0).key not in store.showtimes
+
+    again = evaluate_listed(store, make_showtime(0), now=NOW + timedelta(minutes=3))
+    assert again is not None, "되돌렸으므로 다시 신규로 감지돼야 한다"
+
+
+def test_rollback_restores_exact_previous_observation(tmp_path):
+    store = _warm(tmp_path)
+    evaluate_listed(store, make_showtime(2), min_seats=10)  # 조용히 기록만
+    before = store.showtimes[make_showtime(2).key]
+
+    tr = evaluate_listed(store, make_showtime(50), min_seats=10, now=NOW + timedelta(minutes=3))
+    assert tr is not None
+    store.rollback(tr)
+
+    assert store.showtimes[make_showtime(2).key] == before

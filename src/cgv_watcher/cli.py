@@ -119,6 +119,35 @@ def _notify_all(notifiers: list[Notifier], title: str, body: str) -> bool:
     return ok
 
 
+def _deliver(notifiers: list[Notifier], store: StateStore, transitions) -> int:
+    """감지 즉시 알린다. 전달하지 못한 건수를 반환한다.
+
+    라운드가 끝날 때마다 바로 보내는 게 중요하다. 실행이 50분씩 이어지므로
+    끝에 모아서 보내면 첫 라운드에 잡은 좌석이 50분 뒤에야 전달된다.
+
+    모든 채널에서 실패하면 그 회차의 관측을 되돌려 다음 라운드에 재시도한다.
+    """
+    undelivered = 0
+    for transition in transitions:
+        if transition.kind == KIND_LISTED:
+            title, body = build_listed_text(transition)
+        else:
+            title, body = build_seat_text(transition)
+
+        if _notify_all(notifiers, title, body):
+            continue
+
+        undelivered += 1
+        store.rollback(transition)
+        log.error(
+            "알림 전달 실패 — 모든 채널에서 실패: %s %s %s",
+            transition.showtime.movie_name,
+            transition.showtime.display_date(),
+            transition.showtime.display_time(),
+        )
+    return undelivered
+
+
 def _collect_targets(
     config: Config, sites: dict[str, str]
 ) -> dict[str, list[WatchRule]]:
@@ -270,6 +299,7 @@ def run(config: Config, notifiers: list[Notifier], dump_dir: Path) -> int:
     throttle = Throttle(config.polling.request_delay_sec)
     transitions: list[Transition] = []
     last_snapshot: list[tuple[Showtime, int]] = []
+    undelivered = 0
     failure: Exception | None = None
 
     with CgvClient(throttle) as client:
@@ -316,6 +346,10 @@ def run(config: Config, notifiers: list[Notifier], dump_dir: Path) -> int:
                 # 마지막 라운드의 현황이 가장 최신이다.
                 last_snapshot = snapshot
 
+                # 감지 즉시 발송한다. 실행이 50분 이어지므로 끝에 모아 보내면
+                # 첫 라운드에 잡은 좌석이 50분 뒤에 전달된다.
+                undelivered += _deliver(notifiers, store, round_transitions)
+
                 # 오래 도는 실행에서 job 이 중간에 죽어도 여기까지의 관측을
                 # 잃지 않도록 라운드마다 저장한다. 파일이 작아 비용은 무시할 만하다.
                 store.save()
@@ -334,22 +368,6 @@ def run(config: Config, notifiers: list[Notifier], dump_dir: Path) -> int:
             log.exception("감시 실패 (연속 %d회)", store.failure_consecutive)
 
     store.prune(datetime.now(KST).date())
-
-    undelivered = 0
-    for transition in transitions:
-        if transition.kind == KIND_LISTED:
-            title, body = build_listed_text(transition)
-        else:
-            title, body = build_seat_text(transition)
-        if not _notify_all(notifiers, title, body):
-            undelivered += 1
-            # 좌석을 찾아놓고 사용자에게 못 전달한 것이므로 실패로 취급한다.
-            log.error(
-                "알림 전달 실패 — 모든 채널에서 실패: %s %s %s",
-                transition.showtime.movie_name,
-                transition.showtime.display_date(),
-                transition.showtime.display_time(),
-            )
 
     if failure is not None:
         if store.should_alert_failure(

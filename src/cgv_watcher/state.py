@@ -36,6 +36,9 @@ class Transition:
     min_seats: int
     rule_names: tuple[str, ...]
     kind: str = KIND_SEAT
+    # 알림 전송이 실패했을 때 되돌리기 위한, 이 회차의 직전 관측값.
+    # None 이면 이전에 본 적 없는 회차라는 뜻이다.
+    previous_state: SeatState | None = None
 
 
 class StateStore:
@@ -212,7 +215,25 @@ class StateStore:
             min_seats=min_seats,
             rule_names=rule_names,
             kind=kind,
+            previous_state=previous,
         )
+
+    def rollback(self, transition: "Transition") -> None:
+        """알림 전송에 실패한 회차의 관측을 직전 값으로 되돌린다.
+
+        evaluate 는 '알리기로 결정한 시점'에 state 를 갱신한다. 그런데 전송이
+        실패하면 결정만 남고 사용자는 아무것도 못 받는다. 되돌리지 않으면
+        다음 라운드에는 이미 갱신된 값 때문에 전이가 성립하지 않아 그 알림이
+        영구히 사라진다 — 정작 자리가 났을 때 놓치는 최악의 경우다.
+
+        되돌려 두면 다음 라운드(약 3분 뒤)에 같은 전이를 다시 감지해 재시도한다.
+        """
+        key = transition.showtime.key
+        if transition.previous_state is None:
+            self.showtimes.pop(key, None)
+        else:
+            self.showtimes[key] = transition.previous_state
+        log.warning("전송 실패로 관측을 되돌림 — 다음 라운드에 재시도한다: %s", key)
 
     def prune(self, today: date) -> int:
         """지난 회차를 정리한다. state 파일이 무한정 커지는 걸 막는다."""
